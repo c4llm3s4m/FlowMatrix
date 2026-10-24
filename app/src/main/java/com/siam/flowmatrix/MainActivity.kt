@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -173,7 +174,22 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                     }
                 }
 
-                // 1. Aggression
+                // 1. Initial Candle Volume Delta Sign (First Ticks)
+                item {
+                    InitialPulseCard(sign = state.initialDeltaSign)
+                }
+
+                // 2. Order Book Imbalance Percentage
+                item {
+                    OrderBookImbalanceCard(imbalance = state.orderBookImbalance)
+                }
+
+                // 3. Multi-Tier Positioning & Smart Money Sentiment Matrix
+                item {
+                    MultiTierPositioningCard(matrix = state.positioningMatrix)
+                }
+
+                // 4. Aggression
                 item {
                     MetricCard("Local Aggression (Live ${state.interval})") {
                         if (activeCandle != null) {
@@ -189,7 +205,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                     }
                 }
 
-                // 2. Open Interest Chart
+                // 5. Open Interest Chart
                 item {
                     val latestOI = state.openInterest.lastOrNull()
                     MetricCard("Open Interest (Live)") {
@@ -211,25 +227,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                     }
                 }
 
-                // 3. Positioning Ratios
-                item {
-                    val latestWhale = state.takerLongShort.lastOrNull()
-                    val latestRetail = state.globalLongShort.lastOrNull()
-                    MetricCard("Positioning Ratio") {
-                        if (latestWhale != null && latestRetail != null) {
-                            DataRow("Taker Buy/Sell Ratio", String.format("%.4f", latestWhale.buySellRatio.toDoubleOrNull() ?: 0.0))
-                            DataRow("Global Account L/S", String.format("%.4f", latestRetail.longShortRatio.toDoubleOrNull() ?: 0.0))
-                            val retailLongs = (latestRetail.longAccount.toDoubleOrNull() ?: 0.0) * 100
-                            val retailShorts = (latestRetail.shortAccount.toDoubleOrNull() ?: 0.0) * 100
-                            DataRow("Retail Longs", String.format("%.2f%%", retailLongs))
-                            DataRow("Retail Shorts", String.format("%.2f%%", retailShorts))
-                        } else {
-                            Text("Positioning ratio data unavailable", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-
-                // 4. Cumulative Volume Delta (CVD) Chart
+                // 6. Cumulative Volume Delta (CVD) Chart
                 item {
                     MetricCard("Cumulative Volume Delta (CVD)") {
                         val cvdHistory = remember(state.candles, state.liveCandle) {
@@ -259,6 +257,179 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun MultiTierPositioningCard(matrix: PositioningMatrix?) {
+    MetricCard("Multi-Tier Positioning & Smart Money") {
+        if (matrix != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Smart Money Sentiment", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                SentimentChip(sentiment = matrix.smartMoneySentiment)
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Retail L/S Ratio", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(String.format("%.2f", matrix.retailRatio), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    SentimentChip(sentiment = matrix.retailSentiment)
+                }
+            }
+
+            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Whale Account L/S", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(String.format("%.2f", matrix.whaleAccountRatio), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    SentimentChip(sentiment = matrix.whaleAccountSentiment)
+                }
+            }
+
+            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Whale Position L/S", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(String.format("%.2f", matrix.whalePositionRatio), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    SentimentChip(sentiment = matrix.whalePositionSentiment)
+                }
+            }
+        } else {
+            Text("Positioning metrics loading...", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+fun SentimentChip(sentiment: SentimentTag) {
+    val (badgeColor, containerColor) = when (sentiment) {
+        SentimentTag.EXTREMELY_BULLISH -> Color(0xFF00C853) to Color(0x2B00C853)
+        SentimentTag.BULLISH -> Color(0xFF66BB6A) to Color(0x2266BB6A)
+        SentimentTag.NEUTRAL -> Color(0xFFFFB300) to Color(0x22FFB300)
+        SentimentTag.BEARISH -> Color(0xFFEF5350) to Color(0x22EF5350)
+        SentimentTag.EXTREMELY_BEARISH -> Color(0xFFD50000) to Color(0x2BD50000)
+    }
+
+    Surface(
+        color = containerColor,
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Text(
+            text = sentiment.label.uppercase(),
+            color = badgeColor,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Black,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+        )
+    }
+}
+
+@Composable
+fun InitialPulseCard(sign: InitialDeltaSign) {
+    MetricCard("Initial Candle Volume Delta (Initial Pulse)") {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("First Ticks Direction", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val chipColor = when (sign) {
+                InitialDeltaSign.POSITIVE -> Color(0xFF00C853)
+                InitialDeltaSign.NEGATIVE -> Color(0xFFD50000)
+                InitialDeltaSign.WAITING -> Color(0xFFFFB300)
+            }
+            Surface(
+                color = chipColor.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(
+                    text = sign.label,
+                    color = chipColor,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun OrderBookImbalanceCard(imbalance: OrderBookImbalance?) {
+    MetricCard("Order Book Imbalance (Depth Dominance)") {
+        if (imbalance != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Order Book Ratio", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                val statusText = if (imbalance.isBidDominant) "BUY PRESSURE" else "SELL PRESSURE"
+                val statusColor = if (imbalance.isBidDominant) Color(0xFF00C853) else Color(0xFFD50000)
+                Surface(
+                    color = statusColor.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = statusText,
+                        color = statusColor,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            OrderBookImbalanceBar(
+                bidPct = imbalance.bidPercentage.toFloat(),
+                askPct = imbalance.askPercentage.toFloat()
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            DataRow("Total Depth Bids", String.format("%,.2f Vol", imbalance.bidVolume), Color(0xFF00C853))
+            DataRow("Total Depth Asks", String.format("%,.2f Vol", imbalance.askVolume), Color(0xFFD50000))
+        } else {
+            Text("Order book depth loading...", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+fun OrderBookImbalanceBar(bidPct: Float, askPct: Float) {
+    val animatedBidPct by animateFloatAsState(targetValue = bidPct, label = "BidPctAnim")
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(text = String.format("Bids %.2f%%", bidPct), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00C853))
+            Text(text = String.format("Asks %.2f%%", askPct), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFD50000))
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(14.dp)
+                .background(Color(0xFFD50000), shape = RoundedCornerShape(7.dp))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(fraction = (animatedBidPct / 100f).coerceIn(0.01f, 0.99f))
+                    .background(Color(0xFF00C853), shape = RoundedCornerShape(topStart = 7.dp, bottomStart = 7.dp))
+            )
         }
     }
 }

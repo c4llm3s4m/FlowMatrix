@@ -65,6 +65,12 @@ class BinanceWebSocketManager(
     private val _liveCandle = MutableStateFlow<CandleOrderFlow?>(null)
     val liveCandle: StateFlow<CandleOrderFlow?> = _liveCandle.asStateFlow()
 
+    private val _initialDeltaSign = MutableStateFlow<InitialDeltaSign>(InitialDeltaSign.WAITING)
+    val initialDeltaSign: StateFlow<InitialDeltaSign> = _initialDeltaSign.asStateFlow()
+
+    @Volatile
+    private var trackedCandleOpenTime = 0L
+
     private val _connectionState = MutableStateFlow<WebSocketState>(WebSocketState.Initializing)
     val connectionState: StateFlow<WebSocketState> = _connectionState.asStateFlow()
 
@@ -80,6 +86,8 @@ class BinanceWebSocketManager(
         activeInterval = interval
         isManuallyDisconnected.set(false)
         reconnectAttempt = 0
+        trackedCandleOpenTime = 0L
+        _initialDeltaSign.value = InitialDeltaSign.WAITING
 
         connectInternal()
     }
@@ -128,9 +136,10 @@ class BinanceWebSocketManager(
 
                     val totalVol = kline.optString("v", "0.0").toDoubleOrNull() ?: 0.0
                     val takerBuyVol = kline.optString("V", "0.0").toDoubleOrNull() ?: (totalVol / 2.0)
+                    val openTime = kline.optLong("t", System.currentTimeMillis())
 
                     val liveData = CandleOrderFlow(
-                        openTime = kline.optLong("t", System.currentTimeMillis()),
+                        openTime = openTime,
                         open = kline.optString("o", "0.0").toDoubleOrNull() ?: 0.0,
                         high = kline.optString("h", "0.0").toDoubleOrNull() ?: 0.0,
                         low = kline.optString("l", "0.0").toDoubleOrNull() ?: 0.0,
@@ -138,6 +147,18 @@ class BinanceWebSocketManager(
                         totalVolume = totalVol,
                         takerBuyVolume = takerBuyVol
                     )
+
+                    // Capture Initial Delta Sign on first incoming tick of a newly opened bar
+                    if (openTime != trackedCandleOpenTime) {
+                        trackedCandleOpenTime = openTime
+                        val initialDelta = takerBuyVol - (totalVol - takerBuyVol)
+                        _initialDeltaSign.value = when {
+                            initialDelta > 0.0 -> InitialDeltaSign.POSITIVE
+                            initialDelta < 0.0 -> InitialDeltaSign.NEGATIVE
+                            else -> InitialDeltaSign.WAITING
+                        }
+                    }
+
                     _liveCandle.value = liveData
                     if (_connectionState.value !is WebSocketState.Connected) {
                         _connectionState.value = WebSocketState.Connected

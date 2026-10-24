@@ -18,9 +18,14 @@ data class DashboardState(
     val isLoading: Boolean = true,
     val connectionStatus: String = "Initializing...",
     val liveCandle: CandleOrderFlow? = null,
+    val initialDeltaSign: InitialDeltaSign = InitialDeltaSign.WAITING,
     val openInterest: List<OpenInterestHistResponse> = emptyList(),
     val takerLongShort: List<TakerLongShortRatioResponse> = emptyList(),
     val globalLongShort: List<GlobalLongShortRatioResponse> = emptyList(),
+    val topTraderAccount: List<TopTraderLongShortRatioResponse> = emptyList(),
+    val topTraderPosition: List<TopTraderLongShortRatioResponse> = emptyList(),
+    val positioningMatrix: PositioningMatrix? = null,
+    val orderBookImbalance: OrderBookImbalance? = null,
     val candles: List<CandleOrderFlow> = emptyList(),
     val error: String? = null
 )
@@ -44,6 +49,12 @@ class FlowMatrixViewModel : ViewModel() {
                 if (liveTick != null) {
                     _uiState.update { it.copy(liveCandle = liveTick) }
                 }
+            }
+        }
+
+        viewModelScope.launch {
+            wsManager.initialDeltaSign.collect { sign ->
+                _uiState.update { it.copy(initialDeltaSign = sign) }
             }
         }
 
@@ -83,7 +94,14 @@ class FlowMatrixViewModel : ViewModel() {
 
     private fun updateCoreState(symbol: String, interval: String) {
         _uiState.update {
-            it.copy(symbol = symbol, interval = interval, isLoading = true, liveCandle = null, error = null)
+            it.copy(
+                symbol = symbol,
+                interval = interval,
+                isLoading = true,
+                liveCandle = null,
+                initialDeltaSign = InitialDeltaSign.WAITING,
+                error = null
+            )
         }
         wsManager.connect(symbol, interval)
         viewModelScope.launch { fetchDashboardData(symbol, interval) }
@@ -99,11 +117,56 @@ class FlowMatrixViewModel : ViewModel() {
             val oiDeferred = async { runCatching { fetcher.getOpenInterestHistory(symbol, macroPeriod) }.getOrDefault(emptyList()) }
             val takerLSDeferred = async { runCatching { fetcher.getTakerLongShortRatio(symbol, macroPeriod) }.getOrDefault(emptyList()) }
             val globalLSDeferred = async { runCatching { fetcher.getGlobalLongShortRatio(symbol, macroPeriod) }.getOrDefault(emptyList()) }
+            val topAccountDeferred = async { runCatching { fetcher.getTopTraderAccountRatio(symbol, macroPeriod) }.getOrDefault(emptyList()) }
+            val topPositionDeferred = async { runCatching { fetcher.getTopTraderPositionRatio(symbol, macroPeriod) }.getOrDefault(emptyList()) }
+            val depthDeferred = async {
+                runCatching { fetcher.getOrderBookDepth(symbol) }.getOrElse {
+                    runCatching { fetcher.getSpotOrderBookDepth(symbol) }.getOrNull()
+                }
+            }
 
             val klines = klinesDeferred.await()
             val oi = oiDeferred.await()
             val takerLS = takerLSDeferred.await()
             val globalLS = globalLSDeferred.await()
+            val topAccount = topAccountDeferred.await()
+            val topPosition = topPositionDeferred.await()
+            val depth = depthDeferred.await()
+
+            // Calculate Positioning Matrix
+            val retailRatio = globalLS.lastOrNull()?.longShortRatio?.toDoubleOrNull() ?: 1.0
+            val whaleAccRatio = topAccount.lastOrNull()?.longShortRatio?.toDoubleOrNull() ?: 1.0
+            val whalePosRatio = topPosition.lastOrNull()?.longShortRatio?.toDoubleOrNull() ?: 1.0
+
+            val prevRetail = if (globalLS.size > 1) globalLS[globalLS.size - 2].longShortRatio.toDoubleOrNull() ?: retailRatio else retailRatio
+            val prevWhaleAcc = if (topAccount.size > 1) topAccount[topAccount.size - 2].longShortRatio.toDoubleOrNull() ?: whaleAccRatio else whaleAccRatio
+            val prevWhalePos = if (topPosition.size > 1) topPosition[topPosition.size - 2].longShortRatio.toDoubleOrNull() ?: whalePosRatio else whalePosRatio
+
+            val positioningMatrix = PositioningMatrix(
+                retailRatio = retailRatio,
+                retailChangeDown = retailRatio < prevRetail,
+                whaleAccountRatio = whaleAccRatio,
+                whaleAccountChangeDown = whaleAccRatio < prevWhaleAcc,
+                whalePositionRatio = whalePosRatio,
+                whalePositionChangeDown = whalePosRatio < prevWhalePos
+            )
+
+            // Calculate Order Book Imbalance Percentage
+            val orderBookImbalance = if (depth != null && (depth.bids.isNotEmpty() || depth.asks.isNotEmpty())) {
+                val totalBids = depth.bids.sumOf { it.getOrNull(1)?.toDoubleOrNull() ?: 0.0 }
+                val totalAsks = depth.asks.sumOf { it.getOrNull(1)?.toDoubleOrNull() ?: 0.0 }
+                val totalVol = totalBids + totalAsks
+                if (totalVol > 0.0) {
+                    val bidPct = (totalBids / totalVol) * 100.0
+                    val askPct = (totalAsks / totalVol) * 100.0
+                    OrderBookImbalance(
+                        bidVolume = totalBids,
+                        askVolume = totalAsks,
+                        bidPercentage = bidPct,
+                        askPercentage = askPct
+                    )
+                } else OrderBookImbalance()
+            } else null
 
             // If Futures klines failed or were blocked, try Spot klines API as fallback
             val finalKlines = klines.ifEmpty {
@@ -120,6 +183,10 @@ class FlowMatrixViewModel : ViewModel() {
                     openInterest = oi,
                     takerLongShort = takerLS,
                     globalLongShort = globalLS,
+                    topTraderAccount = topAccount,
+                    topTraderPosition = topPosition,
+                    positioningMatrix = positioningMatrix,
+                    orderBookImbalance = orderBookImbalance,
                     candles = finalKlines,
                     error = errorMessage
                 )

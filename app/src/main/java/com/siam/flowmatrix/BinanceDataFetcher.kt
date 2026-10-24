@@ -33,6 +33,41 @@ class BinanceDataFetcher {
         return fetch("$futuresBaseUrl/futures/data/globalLongShortAccountRatio", symbol, period, limit)
     }
 
+    suspend fun getTopTraderAccountRatio(symbol: String, period: String = "5m", limit: Int = 50): List<TopTraderLongShortRatioResponse> {
+        return fetch("$futuresBaseUrl/futures/data/topLongShortAccountRatio", symbol, period, limit)
+    }
+
+    suspend fun getTopTraderPositionRatio(symbol: String, period: String = "5m", limit: Int = 50): List<TopTraderLongShortRatioResponse> {
+        return fetch("$futuresBaseUrl/futures/data/topLongShortPositionRatio", symbol, period, limit)
+    }
+
+    suspend fun getOrderBookDepth(symbol: String, limit: Int = 20): OrderBookDepthResponse = withContext(Dispatchers.IO) {
+        val httpUrl = "$futuresBaseUrl/fapi/v1/depth".toHttpUrlOrNull()?.newBuilder()
+            ?.addQueryParameter("symbol", symbol)
+            ?.addQueryParameter("limit", limit.toString())
+            ?.build() ?: throw IllegalArgumentException("Invalid URL")
+
+        fetchDepth(httpUrl.toString())
+    }
+
+    suspend fun getSpotOrderBookDepth(symbol: String, limit: Int = 20): OrderBookDepthResponse = withContext(Dispatchers.IO) {
+        val httpUrl = "$spotBaseUrl/api/v3/depth".toHttpUrlOrNull()?.newBuilder()
+            ?.addQueryParameter("symbol", symbol)
+            ?.addQueryParameter("limit", limit.toString())
+            ?.build() ?: throw IllegalArgumentException("Invalid URL")
+
+        fetchDepth(httpUrl.toString())
+    }
+
+    private fun fetchDepth(urlString: String): OrderBookDepthResponse {
+        val request = Request.Builder().url(urlString).build()
+        return client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("Unexpected code $response")
+            val body = response.body?.string() ?: "{}"
+            json.decodeFromString<OrderBookDepthResponse>(body)
+        }
+    }
+
     private suspend inline fun <reified T> fetch(url: String, symbol: String, period: String, limit: Int): List<T> = withContext(Dispatchers.IO) {
         val httpUrl = url.toHttpUrlOrNull()?.newBuilder()
             ?.addQueryParameter("symbol", symbol)
