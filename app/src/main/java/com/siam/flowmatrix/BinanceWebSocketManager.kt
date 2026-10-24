@@ -55,6 +55,10 @@ class BinanceWebSocketManager(
 
     @Volatile
     private var webSocket: WebSocket? = null
+
+    @Volatile
+    private var depthWebSocket: WebSocket? = null
+
     private var activeSymbol: String = "BTCUSDT"
     private var activeInterval: String = "5m"
 
@@ -67,6 +71,9 @@ class BinanceWebSocketManager(
 
     private val _initialDeltaSign = MutableStateFlow<InitialDeltaSign>(InitialDeltaSign.WAITING)
     val initialDeltaSign: StateFlow<InitialDeltaSign> = _initialDeltaSign.asStateFlow()
+
+    private val _liveOrderBookImbalance = MutableStateFlow<OrderBookImbalance?>(null)
+    val liveOrderBookImbalance: StateFlow<OrderBookImbalance?> = _liveOrderBookImbalance.asStateFlow()
 
     @Volatile
     private var trackedCandleOpenTime = 0L
@@ -88,6 +95,7 @@ class BinanceWebSocketManager(
         reconnectAttempt = 0
         trackedCandleOpenTime = 0L
         _initialDeltaSign.value = InitialDeltaSign.WAITING
+        _liveOrderBookImbalance.value = null
 
         connectInternal()
     }
@@ -100,14 +108,19 @@ class BinanceWebSocketManager(
         reconnectJob?.cancel()
         reconnectJob = null
 
-        // Cancel existing WebSocket reference safely
+        // Cancel existing WebSocket references safely
         val oldWs = webSocket
         webSocket = null
         oldWs?.cancel()
 
-        val lowerSymbol = activeSymbol.lowercase()
-        val wsUrl = "wss://fstream.binance.com/market/ws/${lowerSymbol}@kline_$activeInterval"
+        val oldDepthWs = depthWebSocket
+        depthWebSocket = null
+        oldDepthWs?.cancel()
 
+        val lowerSymbol = activeSymbol.lowercase()
+
+        // 1. Primary Dedicated Kline WebSocket (@kline) - 100% Isolated for live price, aggression & initial pulse
+        val wsUrl = "wss://fstream.binance.com/market/ws/${lowerSymbol}@kline_$activeInterval"
         _connectionState.value = WebSocketState.Connecting(reconnectAttempt)
 
         val request = Request.Builder().url(wsUrl).build()
@@ -192,6 +205,70 @@ class BinanceWebSocketManager(
         })
 
         this.webSocket = currentWs
+
+        // 2. Parallel Depth WebSocket (@depth20@100ms) - Dedicated stream for real-time Order Book Imbalance
+        val depthWsUrl = "wss://fstream.binance.com/ws/${lowerSymbol}@depth20@100ms"
+        val depthRequest = Request.Builder().url(depthWsUrl).build()
+
+        val currentDepthWs = client.newWebSocket(depthRequest, object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                if (this@BinanceWebSocketManager.depthWebSocket != webSocket) return
+                try {
+                    val json = JSONObject(text)
+                    if (json.has("b") && json.has("a")) {
+                        val bidsArray = json.optJSONArray("b")
+                        val asksArray = json.optJSONArray("a")
+
+                        var totalBidVol = 0.0
+                        if (bidsArray != null) {
+                            for (i in 0 until bidsArray.length()) {
+                                val level = bidsArray.optJSONArray(i)
+                                val qty = level?.optString(1)?.toDoubleOrNull() ?: 0.0
+                                totalBidVol += qty
+                            }
+                        }
+
+                        var totalAskVol = 0.0
+                        if (asksArray != null) {
+                            for (i in 0 until asksArray.length()) {
+                                val level = asksArray.optJSONArray(i)
+                                val qty = level?.optString(1)?.toDoubleOrNull() ?: 0.0
+                                totalAskVol += qty
+                            }
+                        }
+
+                        val totalVol = totalBidVol + totalAskVol
+                        if (totalVol > 0.0) {
+                            val bidPct = (totalBidVol / totalVol) * 100.0
+                            val askPct = (totalAskVol / totalVol) * 100.0
+                            _liveOrderBookImbalance.value = OrderBookImbalance(
+                                bidVolume = totalBidVol,
+                                askVolume = totalAskVol,
+                                bidPercentage = bidPct,
+                                askPercentage = askPct
+                            )
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Ignored or logged
+                }
+            }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                if (this@BinanceWebSocketManager.depthWebSocket != webSocket) return
+                webSocket.close(1000, null)
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                // Handled gracefully without affecting main kline socket
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                // Handled gracefully without affecting main kline socket
+            }
+        })
+
+        this.depthWebSocket = currentDepthWs
     }
 
     @Synchronized
@@ -230,6 +307,10 @@ class BinanceWebSocketManager(
         val ws = webSocket
         webSocket = null
         ws?.cancel()
+
+        val dWs = depthWebSocket
+        depthWebSocket = null
+        dWs?.cancel()
 
         _connectionState.value = WebSocketState.Disconnected(null)
     }

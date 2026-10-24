@@ -113,6 +113,14 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         }
 
         viewModelScope.launch {
+            wsManager.liveOrderBookImbalance.collect { imbalance ->
+                if (imbalance != null) {
+                    _uiState.update { it.copy(orderBookImbalance = imbalance) }
+                }
+            }
+        }
+
+        viewModelScope.launch {
             wsManager.connectionState.collect { state ->
                 _uiState.update { it.copy(connectionStatus = state.toDisplayString()) }
             }
@@ -154,6 +162,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 isLoading = true,
                 liveCandle = null,
                 initialDeltaSign = InitialDeltaSign.WAITING,
+                orderBookImbalance = null,
                 error = null
             )
         }
@@ -174,8 +183,8 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
             val topAccountDeferred = async { runCatching { fetcher.getTopTraderAccountRatio(symbol, macroPeriod) }.getOrDefault(emptyList()) }
             val topPositionDeferred = async { runCatching { fetcher.getTopTraderPositionRatio(symbol, macroPeriod) }.getOrDefault(emptyList()) }
             val depthDeferred = async {
-                runCatching { fetcher.getOrderBookDepth(symbol) }.getOrElse {
-                    runCatching { fetcher.getSpotOrderBookDepth(symbol) }.getOrNull()
+                runCatching { fetcher.getOrderBookDepth(symbol, limit = 20) }.getOrElse {
+                    runCatching { fetcher.getSpotOrderBookDepth(symbol, limit = 20) }.getOrNull()
                 }
             }
 
@@ -205,8 +214,9 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 whalePositionChangeDown = whalePosRatio < prevWhalePos
             )
 
-            // Calculate Order Book Imbalance Percentage
-            val orderBookImbalance = if (depth != null && (depth.bids.isNotEmpty() || depth.asks.isNotEmpty())) {
+            // Calculate initial REST depth fallback ONLY if real-time WS imbalance is not yet set
+            val currentWsImbalance = _uiState.value.orderBookImbalance
+            val fallbackImbalance = if (currentWsImbalance == null && depth != null && (depth.bids.isNotEmpty() || depth.asks.isNotEmpty())) {
                 val totalBids = depth.bids.sumOf { it.getOrNull(1)?.toDoubleOrNull() ?: 0.0 }
                 val totalAsks = depth.asks.sumOf { it.getOrNull(1)?.toDoubleOrNull() ?: 0.0 }
                 val totalVol = totalBids + totalAsks
@@ -219,8 +229,10 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                         bidPercentage = bidPct,
                         askPercentage = askPct
                     )
-                } else OrderBookImbalance()
+                } else null
             } else null
+
+            val finalImbalance = currentWsImbalance ?: fallbackImbalance
 
             // If Futures klines failed or were blocked, try Spot klines API as fallback
             val finalKlines = klines.ifEmpty {
@@ -240,7 +252,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                     topTraderAccount = topAccount,
                     topTraderPosition = topPosition,
                     positioningMatrix = positioningMatrix,
-                    orderBookImbalance = orderBookImbalance,
+                    orderBookImbalance = finalImbalance,
                     candles = finalKlines,
                     error = errorMessage
                 )
