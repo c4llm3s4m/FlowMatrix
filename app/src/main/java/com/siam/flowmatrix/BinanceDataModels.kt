@@ -28,7 +28,7 @@ data class GlobalLongShortRatioResponse(
     val timestamp: Long
 )
 
-// 1. NEW: Top Trader (Whale) Account & Position Ratio Response
+// 1. Top Trader (Whale) Account & Position Ratio Response
 @Serializable
 data class TopTraderLongShortRatioResponse(
     val symbol: String,
@@ -38,7 +38,7 @@ data class TopTraderLongShortRatioResponse(
     val timestamp: Long
 )
 
-// 2. NEW: Order Book Depth Response (Binance /fapi/v1/depth)
+// 2. Order Book Depth Response (Binance /fapi/v1/depth)
 @Serializable
 data class OrderBookDepthResponse(
     val lastUpdateId: Long = 0,
@@ -46,7 +46,7 @@ data class OrderBookDepthResponse(
     val asks: List<List<String>> = emptyList()
 )
 
-// 3. NEW: Clean Order Book Imbalance Model (e.g., 47.87% Bids vs 52.13% Asks)
+// 3. Clean Order Book Imbalance Model (e.g., 47.87% Bids vs 52.13% Asks)
 data class OrderBookImbalance(
     val bidVolume: Double = 0.0,
     val askVolume: Double = 0.0,
@@ -56,14 +56,14 @@ data class OrderBookImbalance(
     val isBidDominant: Boolean get() = bidPercentage > askPercentage
 }
 
-// 4. NEW: Initial Candle Volume Delta Sign
+// 4. Initial Candle Volume Delta Sign
 enum class InitialDeltaSign(val label: String) {
     WAITING("WAITING..."),
     POSITIVE("POSITIVE (+)"),
     NEGATIVE("NEGATIVE (-)")
 }
 
-// 5. NEW: Sentiment & Multi-Tier Positioning Matrix
+// 5. Sentiment & Multi-Tier Positioning Matrix
 enum class SentimentTag(val label: String, val isBullish: Boolean) {
     EXTREMELY_BULLISH("Extremely Bullish", true),
     BULLISH("Bullish", true),
@@ -102,6 +102,29 @@ data class PositioningMatrix(
             whalePositionRatio <= 0.85 -> SentimentTag.BEARISH
             else -> SentimentTag.NEUTRAL
         }
+}
+
+// 6. Dashboard Telemetry Card Types for Custom Ordering & Persistence
+enum class TelemetryCardType(val id: String, val title: String) {
+    INITIAL_PULSE("INITIAL_PULSE", "Initial Candle Volume Delta"),
+    ORDER_BOOK_IMBALANCE("ORDER_BOOK_IMBALANCE", "Order Book Imbalance"),
+    POSITIONING_MATRIX("POSITIONING_MATRIX", "Multi-Tier Positioning & Smart Money"),
+    LOCAL_AGGRESSION("LOCAL_AGGRESSION", "Local Aggression"),
+    OPEN_INTEREST("OPEN_INTEREST", "Open Interest"),
+    CVD_CHART("CVD_CHART", "Cumulative Volume Delta");
+
+    companion object {
+        val DEFAULT_ORDER = listOf(
+            INITIAL_PULSE,
+            ORDER_BOOK_IMBALANCE,
+            POSITIONING_MATRIX,
+            LOCAL_AGGRESSION,
+            OPEN_INTEREST,
+            CVD_CHART
+        )
+
+        fun fromId(id: String): TelemetryCardType? = entries.firstOrNull { it.id == id }
+    }
 }
 
 // The math engine to calculate candle-specific aggression (Dip vs Dump)

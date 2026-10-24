@@ -1,6 +1,8 @@
 package com.siam.flowmatrix
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import android.content.Context
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -11,6 +13,22 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+class CardOrderPreferences(context: Context) {
+    private val prefs = context.getSharedPreferences("flow_matrix_card_prefs", Context.MODE_PRIVATE)
+
+    fun getCardOrder(): List<TelemetryCardType> {
+        val savedString = prefs.getString("card_order_v1", null) ?: return TelemetryCardType.DEFAULT_ORDER
+        val ids = savedString.split(",")
+        val order = ids.mapNotNull { TelemetryCardType.fromId(it) }
+        return if (order.size == TelemetryCardType.entries.size) order else TelemetryCardType.DEFAULT_ORDER
+    }
+
+    fun saveCardOrder(order: List<TelemetryCardType>) {
+        val stringToSave = order.joinToString(",") { it.id }
+        prefs.edit().putString("card_order_v1", stringToSave).apply()
+    }
+}
 
 data class DashboardState(
     val symbol: String = "BTCUSDT",
@@ -27,20 +45,54 @@ data class DashboardState(
     val positioningMatrix: PositioningMatrix? = null,
     val orderBookImbalance: OrderBookImbalance? = null,
     val candles: List<CandleOrderFlow> = emptyList(),
+    val cardOrder: List<TelemetryCardType> = TelemetryCardType.DEFAULT_ORDER,
     val error: String? = null
 )
 
-class FlowMatrixViewModel : ViewModel() {
+class FlowMatrixViewModel(application: Application) : AndroidViewModel(application) {
     private val fetcher = BinanceDataFetcher()
     private val wsManager = BinanceWebSocketManager()
+    private val prefsManager = CardOrderPreferences(application)
 
-    private val _uiState = MutableStateFlow(DashboardState())
+    private val _uiState = MutableStateFlow(
+        DashboardState(cardOrder = prefsManager.getCardOrder())
+    )
     val uiState: StateFlow<DashboardState> = _uiState.asStateFlow()
 
     init {
         startPolling()
         listenToWebSocket()
         wsManager.connect(_uiState.value.symbol, _uiState.value.interval)
+    }
+
+    fun moveCardUp(card: TelemetryCardType) {
+        val current = _uiState.value.cardOrder.toMutableList()
+        val index = current.indexOf(card)
+        if (index > 0) {
+            val temp = current[index]
+            current[index] = current[index - 1]
+            current[index - 1] = temp
+            _uiState.update { it.copy(cardOrder = current) }
+            prefsManager.saveCardOrder(current)
+        }
+    }
+
+    fun moveCardDown(card: TelemetryCardType) {
+        val current = _uiState.value.cardOrder.toMutableList()
+        val index = current.indexOf(card)
+        if (index in 0 until current.size - 1) {
+            val temp = current[index]
+            current[index] = current[index + 1]
+            current[index + 1] = temp
+            _uiState.update { it.copy(cardOrder = current) }
+            prefsManager.saveCardOrder(current)
+        }
+    }
+
+    fun resetCardOrder() {
+        val defaultOrder = TelemetryCardType.DEFAULT_ORDER
+        _uiState.update { it.copy(cardOrder = defaultOrder) }
+        prefsManager.saveCardOrder(defaultOrder)
     }
 
     private fun listenToWebSocket() {
