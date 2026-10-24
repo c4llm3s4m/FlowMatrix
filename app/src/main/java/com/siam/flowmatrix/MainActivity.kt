@@ -185,7 +185,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                     }
                 }
 
-                // DYNAMICALLY RENDERED & REORDERABLE TELEMETRY CARDS (1st through 6th)
+                // DYNAMICALLY RENDERED & REORDERABLE TELEMETRY CARDS (1st through 7th)
                 itemsIndexed(
                     items = state.cardOrder,
                     key = { _, cardType -> cardType.id }
@@ -210,6 +210,15 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                         )
                         TelemetryCardType.POSITIONING_MATRIX -> MultiTierPositioningCard(
                             matrix = state.positioningMatrix,
+                            isFirst = isFirst,
+                            isLast = isLast,
+                            onMoveUp = { viewModel.moveCardUp(cardType) },
+                            onMoveDown = { viewModel.moveCardDown(cardType) }
+                        )
+                        TelemetryCardType.POSITIONING_RATIO -> PositioningRatioCard(
+                            matrix = state.positioningMatrix,
+                            takerLongShort = state.takerLongShort,
+                            globalLongShort = state.globalLongShort,
                             isFirst = isFirst,
                             isLast = isLast,
                             onMoveUp = { viewModel.moveCardUp(cardType) },
@@ -297,6 +306,87 @@ fun MetricCard(
             }
             Spacer(modifier = Modifier.height(10.dp))
             content()
+        }
+    }
+}
+
+// RESTORED: Classic Positioning Ratio Card (7th Card)
+@Composable
+fun PositioningRatioCard(
+    matrix: PositioningMatrix?,
+    takerLongShort: List<TakerLongShortRatioResponse>,
+    globalLongShort: List<GlobalLongShortRatioResponse>,
+    isFirst: Boolean,
+    isLast: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit
+) {
+    MetricCard(
+        title = "Positioning Ratio",
+        isFirst = isFirst,
+        isLast = isLast,
+        onMoveUp = onMoveUp,
+        onMoveDown = onMoveDown
+    ) {
+        val latestTaker = takerLongShort.lastOrNull()
+        val latestRetail = globalLongShort.lastOrNull()
+
+        if (latestTaker != null || latestRetail != null) {
+            // Row 1: Smart Money Sentiment
+            if (matrix != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Smart Money Sentiment", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    SentimentChip(sentiment = matrix.smartMoneySentiment)
+                }
+            }
+
+            // Row 2: Taker Buy/Sell Ratio (with Buy%/Sell% split)
+            if (latestTaker != null) {
+                val buyVol = latestTaker.buyVol.toDoubleOrNull() ?: 0.0
+                val sellVol = latestTaker.sellVol.toDoubleOrNull() ?: 0.0
+                val totalVol = buyVol + sellVol
+                val ratioVal = latestTaker.buySellRatio.toDoubleOrNull() ?: 0.0
+                val ratioColor = if (ratioVal >= 1.0) GreenPositive else CoralNegative
+
+                val splitText = if (totalVol > 0.0) {
+                    val buyPct = (buyVol / totalVol) * 100.0
+                    val sellPct = (sellVol / totalVol) * 100.0
+                    String.format("(%.1f%% / %.1f%%)", buyPct, sellPct)
+                } else "(50.0% / 50.0%)"
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Taker Buy/Sell Ratio", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(splitText, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(String.format("%.4f", ratioVal), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = ratioColor)
+                    }
+                }
+            }
+
+            // Row 3: Global Account L/S
+            if (latestRetail != null) {
+                val globalRatio = latestRetail.longShortRatio.toDoubleOrNull() ?: 0.0
+                DataRow("Global Account L/S", String.format("%.4f", globalRatio))
+
+                // Row 4: Retail Longs
+                val retailLongs = (latestRetail.longAccount.toDoubleOrNull() ?: 0.0) * 100.0
+                DataRow("Retail Longs", String.format("%.2f%%", retailLongs), GreenPositive)
+
+                // Row 5: Retail Shorts
+                val retailShorts = (latestRetail.shortAccount.toDoubleOrNull() ?: 0.0) * 100.0
+                DataRow("Retail Shorts", String.format("%.2f%%", retailShorts), CoralNegative)
+            }
+        } else {
+            Text("Positioning ratio data loading...", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

@@ -20,8 +20,10 @@ class CardOrderPreferences(context: Context) {
     fun getCardOrder(): List<TelemetryCardType> {
         val savedString = prefs.getString("card_order_v1", null) ?: return TelemetryCardType.DEFAULT_ORDER
         val ids = savedString.split(",")
-        val order = ids.mapNotNull { TelemetryCardType.fromId(it) }
-        return if (order.size == TelemetryCardType.entries.size) order else TelemetryCardType.DEFAULT_ORDER
+        val savedOrder = ids.mapNotNull { TelemetryCardType.fromId(it) }.distinct()
+        val missingCards = TelemetryCardType.entries.filter { it !in savedOrder }
+        val fullOrder = savedOrder + missingCards
+        return if (fullOrder.size == TelemetryCardType.entries.size) fullOrder else TelemetryCardType.DEFAULT_ORDER
     }
 
     fun saveCardOrder(order: List<TelemetryCardType>) {

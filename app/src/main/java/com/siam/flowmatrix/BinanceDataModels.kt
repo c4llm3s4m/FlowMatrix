@@ -104,11 +104,12 @@ data class PositioningMatrix(
         }
 }
 
-// 6. Dashboard Telemetry Card Types for Custom Ordering & Persistence
+// 6. Dashboard Telemetry Card Types for Custom Ordering & Persistence (7 Cards Total)
 enum class TelemetryCardType(val id: String, val title: String) {
     INITIAL_PULSE("INITIAL_PULSE", "Initial Candle Volume Delta"),
     ORDER_BOOK_IMBALANCE("ORDER_BOOK_IMBALANCE", "Order Book Imbalance"),
     POSITIONING_MATRIX("POSITIONING_MATRIX", "Multi-Tier Positioning & Smart Money"),
+    POSITIONING_RATIO("POSITIONING_RATIO", "Positioning Ratio"),
     LOCAL_AGGRESSION("LOCAL_AGGRESSION", "Local Aggression"),
     OPEN_INTEREST("OPEN_INTEREST", "Open Interest"),
     CVD_CHART("CVD_CHART", "Cumulative Volume Delta");
@@ -118,12 +119,13 @@ enum class TelemetryCardType(val id: String, val title: String) {
             INITIAL_PULSE,
             ORDER_BOOK_IMBALANCE,
             POSITIONING_MATRIX,
+            POSITIONING_RATIO,
             LOCAL_AGGRESSION,
             OPEN_INTEREST,
             CVD_CHART
         )
 
-        fun fromId(id: String): TelemetryCardType? = entries.firstOrNull { it.id == id }
+        fun fromId(id: String): TelemetryCardType? = entries.firstOrNull { it.id.equals(id, ignoreCase = true) }
     }
 }
 
