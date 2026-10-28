@@ -2,6 +2,8 @@ package com.siam.flowmatrix
 
 import android.app.Application
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.async
@@ -30,6 +32,15 @@ class CardOrderPreferences(context: Context) {
         val stringToSave = order.joinToString(",") { it.id }
         prefs.edit().putString("card_order_v1", stringToSave).apply()
     }
+
+    fun getConnectionMode(): ConnectionMode {
+        val savedId = prefs.getString("connection_mode_v1", ConnectionMode.AUTO.id) ?: ConnectionMode.AUTO.id
+        return ConnectionMode.fromId(savedId)
+    }
+
+    fun saveConnectionMode(mode: ConnectionMode) {
+        prefs.edit().putString("connection_mode_v1", mode.id).apply()
+    }
 }
 
 data class DashboardState(
@@ -48,6 +59,8 @@ data class DashboardState(
     val orderBookImbalance: OrderBookImbalance? = null,
     val candles: List<CandleOrderFlow> = emptyList(),
     val cardOrder: List<TelemetryCardType> = TelemetryCardType.DEFAULT_ORDER,
+    val connectionMode: ConnectionMode = ConnectionMode.AUTO,
+    val activeMode: ConnectionMode = ConnectionMode.BROADBAND,
     val error: String? = null
 )
 
@@ -57,14 +70,44 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     private val prefsManager = CardOrderPreferences(application)
 
     private val _uiState = MutableStateFlow(
-        DashboardState(cardOrder = prefsManager.getCardOrder())
+        DashboardState(
+            cardOrder = prefsManager.getCardOrder(),
+            connectionMode = prefsManager.getConnectionMode()
+        )
     )
     val uiState: StateFlow<DashboardState> = _uiState.asStateFlow()
 
     init {
+        val savedMode = prefsManager.getConnectionMode()
+        val effective = detectEffectiveMode(savedMode)
+        _uiState.update { it.copy(connectionMode = savedMode, activeMode = effective) }
+
         startPolling()
         listenToWebSocket()
-        wsManager.connect(_uiState.value.symbol, _uiState.value.interval)
+        wsManager.connect(_uiState.value.symbol, _uiState.value.interval, effective)
+    }
+
+    private fun detectEffectiveMode(mode: ConnectionMode): ConnectionMode {
+        if (mode != ConnectionMode.AUTO) return mode
+        return try {
+            val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            val activeNetwork = cm?.activeNetwork
+            val caps = cm?.getNetworkCapabilities(activeNetwork)
+            if (caps != null) {
+                val isCellular = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                val isMetered = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+                if (isCellular || isMetered) ConnectionMode.CELLULAR else ConnectionMode.BROADBAND
+            } else ConnectionMode.BROADBAND
+        } catch (_: Exception) {
+            ConnectionMode.BROADBAND
+        }
+    }
+
+    fun setConnectionMode(mode: ConnectionMode) {
+        prefsManager.saveConnectionMode(mode)
+        val effective = detectEffectiveMode(mode)
+        _uiState.update { it.copy(connectionMode = mode, activeMode = effective) }
+        wsManager.connect(_uiState.value.symbol, _uiState.value.interval, effective)
     }
 
     fun moveCardUp(card: TelemetryCardType) {
@@ -155,6 +198,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun updateCoreState(symbol: String, interval: String) {
+        val effective = detectEffectiveMode(_uiState.value.connectionMode)
         _uiState.update {
             it.copy(
                 symbol = symbol,
@@ -163,10 +207,11 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 liveCandle = null,
                 initialDeltaSign = InitialDeltaSign.WAITING,
                 orderBookImbalance = null,
+                activeMode = effective,
                 error = null
             )
         }
-        wsManager.connect(symbol, interval)
+        wsManager.connect(symbol, interval, effective)
         viewModelScope.launch { fetchDashboardData(symbol, interval) }
     }
 

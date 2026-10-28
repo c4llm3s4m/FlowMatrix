@@ -129,6 +129,17 @@ enum class TelemetryCardType(val id: String, val title: String) {
     }
 }
 
+// 7. Network Connection Mode for Adaptive Depth Streaming
+enum class ConnectionMode(val id: String, val label: String, val streamIntervalMs: String) {
+    AUTO("AUTO", "🌐 AUTO DETECT", "AUTO"),
+    BROADBAND("BROADBAND", "📶 BROADBAND (100ms)", "100ms"),
+    CELLULAR("CELLULAR", "📱 HOTSPOT / CELLULAR (1000ms)", "1000ms");
+
+    companion object {
+        fun fromId(id: String): ConnectionMode = entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: AUTO
+    }
+}
+
 // The math engine to calculate candle-specific aggression (Dip vs Dump)
 data class CandleOrderFlow(
     val openTime: Long,

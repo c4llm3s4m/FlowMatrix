@@ -61,6 +61,7 @@ class BinanceWebSocketManager(
 
     private var activeSymbol: String = "BTCUSDT"
     private var activeInterval: String = "5m"
+    private var activeConnectionMode: ConnectionMode = ConnectionMode.AUTO
 
     @Volatile
     private var reconnectAttempt = 0
@@ -78,10 +79,13 @@ class BinanceWebSocketManager(
     @Volatile
     private var trackedCandleOpenTime = 0L
 
+    @Volatile
+    private var lastDepthFrameTimeMs = 0L
+
     private val _connectionState = MutableStateFlow<WebSocketState>(WebSocketState.Initializing)
     val connectionState: StateFlow<WebSocketState> = _connectionState.asStateFlow()
 
-    fun connect(symbol: String, interval: String = "5m") {
+    fun connect(symbol: String, interval: String = "5m", mode: ConnectionMode = ConnectionMode.AUTO) {
         val trimmed = symbol.trim().uppercase()
         if (trimmed.isBlank()) return
 
@@ -91,9 +95,11 @@ class BinanceWebSocketManager(
             trimmed
         }
         activeInterval = interval
+        activeConnectionMode = mode
         isManuallyDisconnected.set(false)
         reconnectAttempt = 0
         trackedCandleOpenTime = 0L
+        lastDepthFrameTimeMs = 0L
         _initialDeltaSign.value = InitialDeltaSign.WAITING
         _liveOrderBookImbalance.value = null
 
@@ -206,14 +212,22 @@ class BinanceWebSocketManager(
 
         this.webSocket = currentWs
 
-        // 2. Parallel Depth WebSocket (@depth20@100ms) - Dedicated stream for real-time Order Book Imbalance
-        val depthWsUrl = "wss://fstream.binance.com/ws/${lowerSymbol}@depth20@100ms"
+        // 2. Parallel Depth WebSocket Stream - Adaptive based on ConnectionMode
+        val depthStreamSuffix = if (activeConnectionMode == ConnectionMode.CELLULAR) "@depth20@1000ms" else "@depth20@100ms"
+        val depthWsUrl = "wss://fstream.binance.com/ws/${lowerSymbol}$depthStreamSuffix"
         val depthRequest = Request.Builder().url(depthWsUrl).build()
 
         val currentDepthWs = client.newWebSocket(depthRequest, object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (this@BinanceWebSocketManager.depthWebSocket != webSocket) return
                 try {
+                    // Socket Backpressure Filtering for Cellular Mode: Skip intermediate clumped frames (<300ms)
+                    val now = System.currentTimeMillis()
+                    if (activeConnectionMode == ConnectionMode.CELLULAR && (now - lastDepthFrameTimeMs < 300L)) {
+                        return
+                    }
+                    lastDepthFrameTimeMs = now
+
                     val json = JSONObject(text)
                     if (json.has("b") && json.has("a")) {
                         val bidsArray = json.optJSONArray("b")
@@ -260,11 +274,11 @@ class BinanceWebSocketManager(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                // Handled gracefully without affecting main kline socket
+                // Handled gracefully
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                // Handled gracefully without affecting main kline socket
+                // Handled gracefully
             }
         })
 

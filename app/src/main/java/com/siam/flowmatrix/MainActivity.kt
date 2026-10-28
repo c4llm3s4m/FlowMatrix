@@ -76,7 +76,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         // --- SEARCH INPUT & GO BUTTON ---
         Row(
@@ -108,7 +108,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
             )
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         // --- TIMEFRAME SELECTOR ---
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -121,7 +121,28 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        // --- CONNECTION MODE SELECTOR (Broadband vs Hotspot / Cellular) ---
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Mode:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            ConnectionMode.entries.forEach { mode ->
+                FilterChip(
+                    selected = state.connectionMode == mode,
+                    onClick = { viewModel.setConnectionMode(mode) },
+                    label = {
+                        val activeLabel = if (state.connectionMode == ConnectionMode.AUTO && mode == ConnectionMode.AUTO) {
+                            "🌐 AUTO (${state.activeMode.streamIntervalMs})"
+                        } else mode.label
+                        Text(activeLabel, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
 
         if (state.isLoading) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
@@ -203,6 +224,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                         )
                         TelemetryCardType.ORDER_BOOK_IMBALANCE -> OrderBookImbalanceCard(
                             imbalance = state.orderBookImbalance,
+                            activeMode = state.activeMode,
                             isFirst = isFirst,
                             isLast = isLast,
                             onMoveUp = { viewModel.moveCardUp(cardType) },
@@ -436,13 +458,15 @@ fun InitialPulseCard(
 @Composable
 fun OrderBookImbalanceCard(
     imbalance: OrderBookImbalance?,
+    activeMode: ConnectionMode,
     isFirst: Boolean,
     isLast: Boolean,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit
 ) {
+    val rateText = if (activeMode == ConnectionMode.CELLULAR) "HOTSPOT (1000ms)" else "BROADBAND (100ms)"
     MetricCard(
-        title = "Order Book Imbalance (Depth Dominance)",
+        title = "Order Book Imbalance [$rateText]",
         isFirst = isFirst,
         isLast = isLast,
         onMoveUp = onMoveUp,
