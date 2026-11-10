@@ -1,5 +1,6 @@
 package com.siam.flowmatrix
 
+import androidx.compose.ui.graphics.Color
 import kotlinx.serialization.Serializable
 import kotlin.math.abs
 
@@ -104,7 +105,7 @@ data class PositioningMatrix(
         }
 }
 
-// 6. Dashboard Telemetry Card Types for Custom Ordering & Persistence (7 Cards Total)
+// 6. Dashboard Telemetry Card Types for Custom Ordering & Persistence (8 Cards Total)
 enum class TelemetryCardType(val id: String, val title: String) {
     INITIAL_PULSE("INITIAL_PULSE", "Initial Candle Volume Delta"),
     ORDER_BOOK_IMBALANCE("ORDER_BOOK_IMBALANCE", "Order Book Imbalance"),
@@ -112,6 +113,7 @@ enum class TelemetryCardType(val id: String, val title: String) {
     POSITIONING_RATIO("POSITIONING_RATIO", "Positioning Ratio"),
     LOCAL_AGGRESSION("LOCAL_AGGRESSION", "Local Aggression"),
     OPEN_INTEREST("OPEN_INTEREST", "Open Interest"),
+    OI_FLOW_REGIME("OI_FLOW_REGIME", "OI Flow Regime (Live Delta)"),
     CVD_CHART("CVD_CHART", "Cumulative Volume Delta");
 
     companion object {
@@ -122,6 +124,7 @@ enum class TelemetryCardType(val id: String, val title: String) {
             POSITIONING_RATIO,
             LOCAL_AGGRESSION,
             OPEN_INTEREST,
+            OI_FLOW_REGIME,
             CVD_CHART
         )
 
@@ -139,6 +142,38 @@ enum class ConnectionMode(val id: String, val label: String, val streamIntervalM
         fun fromId(id: String): ConnectionMode = entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: AUTO
     }
 }
+
+// 8. Core 4-Quadrant OI Flow Regime Models
+enum class OiRegimeTag(
+    val badgeText: String,
+    val subtext: String,
+    val color: Color
+) {
+    NEW_LONGS("NEW LONGS", "Fresh capital entering Longs (Buy to Open)", Color(0xFF10B981)), // Emerald Green (#10B981)
+    NEW_SHORTS("NEW SHORTS", "Fresh capital entering Shorts (Sell to Open)", Color(0xFFEF4444)), // Crimson Red (#EF4444)
+    SHORT_COVERING("SHORT COVERING", "Shorts forced to Buy-to-Close", Color(0xFFEAB308)), // Amber Gold (#EAB308)
+    LONG_LIQUIDATIONS("LONG LIQUIDATIONS", "Longs flushing / Sell-to-Close", Color(0xFFF97316)), // Orange (#F97316)
+    NEUTRAL("NEUTRAL / FLAT", "Waiting for next OI delta", Color(0xFF9CA3AF)); // Muted Gray (#9CA3AF)
+
+    companion object {
+        fun compute(deltaOI: Double, deltaPrice: Double): OiRegimeTag {
+            return when {
+                deltaOI > 0.0 && deltaPrice > 0.0 -> NEW_LONGS
+                deltaOI > 0.0 && deltaPrice < 0.0 -> NEW_SHORTS
+                deltaOI < 0.0 && deltaPrice > 0.0 -> SHORT_COVERING
+                deltaOI < 0.0 && deltaPrice < 0.0 -> LONG_LIQUIDATIONS
+                else -> NEUTRAL
+            }
+        }
+    }
+}
+
+data class OiFlowRegimeState(
+    val regime: OiRegimeTag = OiRegimeTag.NEUTRAL,
+    val priceDeltaPercent: Double = 0.0,
+    val oiDeltaContracts: Double = 0.0,
+    val oiDeltaPercent: Double = 0.0
+)
 
 // The math engine to calculate candle-specific aggression (Dip vs Dump)
 data class CandleOrderFlow(

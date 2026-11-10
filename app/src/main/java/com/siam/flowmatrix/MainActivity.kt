@@ -206,7 +206,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                     }
                 }
 
-                // DYNAMICALLY RENDERED & REORDERABLE TELEMETRY CARDS (1st through 7th)
+                // DYNAMICALLY RENDERED & REORDERABLE TELEMETRY CARDS (1st through 8th)
                 itemsIndexed(
                     items = state.cardOrder,
                     key = { _, cardType -> cardType.id }
@@ -256,6 +256,14 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                         )
                         TelemetryCardType.OPEN_INTEREST -> OpenInterestCard(
                             openInterest = state.openInterest,
+                            isFirst = isFirst,
+                            isLast = isLast,
+                            onMoveUp = { viewModel.moveCardUp(cardType) },
+                            onMoveDown = { viewModel.moveCardDown(cardType) }
+                        )
+                        TelemetryCardType.OI_FLOW_REGIME -> OiFlowRegimeCard(
+                            regimeState = state.oiFlowRegime,
+                            interval = state.interval,
                             isFirst = isFirst,
                             isLast = isLast,
                             onMoveUp = { viewModel.moveCardUp(cardType) },
@@ -328,6 +336,84 @@ fun MetricCard(
             }
             Spacer(modifier = Modifier.height(10.dp))
             content()
+        }
+    }
+}
+
+// NEW: Core 4-Quadrant OI Flow Regime Card
+@Composable
+fun OiFlowRegimeCard(
+    regimeState: OiFlowRegimeState,
+    interval: String,
+    isFirst: Boolean,
+    isLast: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit
+) {
+    MetricCard(
+        title = "OI Flow Regime (Live Delta)",
+        isFirst = isFirst,
+        isLast = isLast,
+        onMoveUp = onMoveUp,
+        onMoveDown = onMoveDown
+    ) {
+        val regime = regimeState.regime
+
+        // Row 1: Active Regime Badge
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Active Regime", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Surface(
+                color = regime.color.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(
+                    text = regime.badgeText,
+                    color = regime.color,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+        // Row 2: Price Delta (Window)
+        val priceDeltaColor = if (regimeState.priceDeltaPercent >= 0.0) GreenPositive else CoralNegative
+        val priceSignStr = if (regimeState.priceDeltaPercent >= 0.0) "+" else ""
+        DataRow(
+            label = "Price Delta ($interval)",
+            value = String.format("%s%.2f%%", priceSignStr, regimeState.priceDeltaPercent),
+            valueColor = priceDeltaColor
+        )
+
+        // Row 3: OI Delta (Contracts)
+        val oiDeltaColor = if (regimeState.oiDeltaContracts >= 0.0) GreenPositive else CoralNegative
+        val oiSignStr = if (regimeState.oiDeltaContracts >= 0.0) "+" else ""
+        val oiValueStr = String.format("%s%,.2f (%s%.2f%%)", oiSignStr, regimeState.oiDeltaContracts, oiSignStr, regimeState.oiDeltaPercent)
+        DataRow(
+            label = "OI Delta (Contracts)",
+            value = oiValueStr,
+            valueColor = oiDeltaColor
+        )
+
+        // Row 4: Mechanics Subtext
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Mechanics", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = regime.subtext,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
+            )
         }
     }
 }

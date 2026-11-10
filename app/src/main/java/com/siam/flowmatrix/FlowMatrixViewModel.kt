@@ -43,6 +43,12 @@ class CardOrderPreferences(context: Context) {
     }
 }
 
+private data class OiPriceSnapshot(
+    val timestampMs: Long,
+    val price: Double,
+    val openInterest: Double
+)
+
 data class DashboardState(
     val symbol: String = "BTCUSDT",
     val interval: String = "5m",
@@ -57,6 +63,7 @@ data class DashboardState(
     val topTraderPosition: List<TopTraderLongShortRatioResponse> = emptyList(),
     val positioningMatrix: PositioningMatrix? = null,
     val orderBookImbalance: OrderBookImbalance? = null,
+    val oiFlowRegime: OiFlowRegimeState = OiFlowRegimeState(),
     val candles: List<CandleOrderFlow> = emptyList(),
     val cardOrder: List<TelemetryCardType> = TelemetryCardType.DEFAULT_ORDER,
     val connectionMode: ConnectionMode = ConnectionMode.AUTO,
@@ -68,6 +75,8 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     private val fetcher = BinanceDataFetcher()
     private val wsManager = BinanceWebSocketManager()
     private val prefsManager = CardOrderPreferences(application)
+
+    private val oiSnapshots = ArrayDeque<OiPriceSnapshot>()
 
     private val _uiState = MutableStateFlow(
         DashboardState(
@@ -101,6 +110,14 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         } catch (_: Exception) {
             ConnectionMode.BROADBAND
         }
+    }
+
+    private fun getLookbackWindowMs(interval: String): Long = when (interval) {
+        "1m" -> 60_000L
+        "5m" -> 300_000L
+        "15m" -> 900_000L
+        "1h" -> 3_600_000L
+        else -> 300_000L
     }
 
     fun setConnectionMode(mode: ConnectionMode) {
@@ -198,6 +215,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun updateCoreState(symbol: String, interval: String) {
+        oiSnapshots.clear()
         val effective = detectEffectiveMode(_uiState.value.connectionMode)
         _uiState.update {
             it.copy(
@@ -207,6 +225,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 liveCandle = null,
                 initialDeltaSign = InitialDeltaSign.WAITING,
                 orderBookImbalance = null,
+                oiFlowRegime = OiFlowRegimeState(),
                 activeMode = effective,
                 error = null
             )
@@ -259,6 +278,40 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 whalePositionChangeDown = whalePosRatio < prevWhalePos
             )
 
+            // Synchronize OI Flow Regime State (WebSocket Price + REST OI)
+            val currentOi = oi.lastOrNull()?.sumOpenInterest?.toDoubleOrNull() ?: 0.0
+            val currentPrice = _uiState.value.liveCandle?.close
+                ?: klines.lastOrNull()?.close
+                ?: 0.0
+
+            val now = System.currentTimeMillis()
+            if (currentOi > 0.0 && currentPrice > 0.0) {
+                oiSnapshots.addLast(OiPriceSnapshot(now, currentPrice, currentOi))
+            }
+
+            val windowMs = getLookbackWindowMs(interval)
+            val cutoff = now - windowMs
+            while (oiSnapshots.isNotEmpty() && oiSnapshots.first().timestampMs < cutoff) {
+                oiSnapshots.removeFirst()
+            }
+
+            val anchor = oiSnapshots.firstOrNull() ?: oiSnapshots.lastOrNull()
+            val oiFlowRegimeState = if (anchor != null && currentOi > 0.0 && currentPrice > 0.0) {
+                val deltaOI = currentOi - anchor.openInterest
+                val deltaPrice = currentPrice - anchor.price
+                val pricePct = if (anchor.price > 0.0) (deltaPrice / anchor.price) * 100.0 else 0.0
+                val oiPct = if (anchor.openInterest > 0.0) (deltaOI / anchor.openInterest) * 100.0 else 0.0
+                val regime = OiRegimeTag.compute(deltaOI, deltaPrice)
+                OiFlowRegimeState(
+                    regime = regime,
+                    priceDeltaPercent = pricePct,
+                    oiDeltaContracts = deltaOI,
+                    oiDeltaPercent = oiPct
+                )
+            } else {
+                OiFlowRegimeState()
+            }
+
             // Calculate initial REST depth fallback ONLY if real-time WS imbalance is not yet set
             val currentWsImbalance = _uiState.value.orderBookImbalance
             val fallbackImbalance = if (currentWsImbalance == null && depth != null && (depth.bids.isNotEmpty() || depth.asks.isNotEmpty())) {
@@ -298,6 +351,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                     topTraderPosition = topPosition,
                     positioningMatrix = positioningMatrix,
                     orderBookImbalance = finalImbalance,
+                    oiFlowRegime = oiFlowRegimeState,
                     candles = finalKlines,
                     error = errorMessage
                 )
