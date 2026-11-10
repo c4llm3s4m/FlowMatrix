@@ -343,7 +343,7 @@ fun MetricCard(
 // NEW: Core 4-Quadrant OI Flow Regime Card
 @Composable
 fun OiFlowRegimeCard(
-    regimeState: OiFlowRegimeState,
+    regimeState: OIFlowRegimeState,
     interval: String,
     isFirst: Boolean,
     isLast: Boolean,
@@ -357,8 +357,6 @@ fun OiFlowRegimeCard(
         onMoveUp = onMoveUp,
         onMoveDown = onMoveDown
     ) {
-        val regime = regimeState.regime
-
         // Row 1: Active Regime Badge
         Row(
             modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
@@ -367,12 +365,12 @@ fun OiFlowRegimeCard(
         ) {
             Text("Active Regime", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             Surface(
-                color = regime.color.copy(alpha = 0.15f),
+                color = regimeState.badgeColor.copy(alpha = 0.15f),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Text(
-                    text = regime.badgeText,
-                    color = regime.color,
+                    text = regimeState.regime.uppercase(),
+                    color = regimeState.badgeColor,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.ExtraBold,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
@@ -383,22 +381,30 @@ fun OiFlowRegimeCard(
         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
         // Row 2: Price Delta (Window)
-        val priceDeltaColor = if (regimeState.priceDeltaPercent >= 0.0) GreenPositive else CoralNegative
-        val priceSignStr = if (regimeState.priceDeltaPercent >= 0.0) "+" else ""
+        val priceColor = when {
+            regimeState.buildingWindow || regimeState.priceDeltaPercent == 0.0 -> MaterialTheme.colorScheme.onSurface
+            regimeState.priceDeltaPercent > 0.0 -> GreenPositive
+            else -> CoralNegative
+        }
+        val priceSignStr = if (regimeState.priceDeltaPercent > 0.0) "+" else ""
         DataRow(
             label = "Price Delta ($interval)",
-            value = String.format("%s%.2f%%", priceSignStr, regimeState.priceDeltaPercent),
-            valueColor = priceDeltaColor
+            value = if (regimeState.buildingWindow) "--" else String.format("%s%.2f%%", priceSignStr, regimeState.priceDeltaPercent),
+            valueColor = priceColor
         )
 
         // Row 3: OI Delta (Contracts)
-        val oiDeltaColor = if (regimeState.oiDeltaContracts >= 0.0) GreenPositive else CoralNegative
-        val oiSignStr = if (regimeState.oiDeltaContracts >= 0.0) "+" else ""
-        val oiValueStr = String.format("%s%,.2f (%s%.2f%%)", oiSignStr, regimeState.oiDeltaContracts, oiSignStr, regimeState.oiDeltaPercent)
+        val oiColor = when {
+            regimeState.buildingWindow || regimeState.oiDeltaContracts == 0.0 -> MaterialTheme.colorScheme.onSurface
+            regimeState.oiDeltaContracts > 0.0 -> GreenPositive
+            else -> CoralNegative
+        }
+        val oiSignStr = if (regimeState.oiDeltaContracts > 0.0) "+" else ""
+        val oiValueStr = if (regimeState.buildingWindow) "--" else String.format("%s%,.2f (%s%.2f%%)", oiSignStr, regimeState.oiDeltaContracts, oiSignStr, regimeState.oiDeltaPercent)
         DataRow(
             label = "OI Delta (Contracts)",
             value = oiValueStr,
-            valueColor = oiDeltaColor
+            valueColor = oiColor
         )
 
         // Row 4: Mechanics Subtext
@@ -409,11 +415,35 @@ fun OiFlowRegimeCard(
         ) {
             Text("Mechanics", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
-                text = regime.subtext,
+                text = regimeState.mechanics,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
             )
+        }
+
+        // Optional Row 5: CVD Confirmation / Divergence
+        if (!regimeState.buildingWindow && regimeState.cvdConfirmation != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Confirmation", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val cvdColor = if (regimeState.cvdConfirmation == "CVD CONFIRMED") GreenPositive else GoldNeutral
+                Surface(
+                    color = cvdColor.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = regimeState.cvdConfirmation,
+                        color = cvdColor,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+            }
         }
     }
 }

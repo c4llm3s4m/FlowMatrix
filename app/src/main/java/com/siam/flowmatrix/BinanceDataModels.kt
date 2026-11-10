@@ -143,36 +143,23 @@ enum class ConnectionMode(val id: String, val label: String, val streamIntervalM
     }
 }
 
-// 8. Core 4-Quadrant OI Flow Regime Models
-enum class OiRegimeTag(
-    val badgeText: String,
-    val subtext: String,
-    val color: Color
-) {
-    NEW_LONGS("NEW LONGS", "Fresh capital entering Longs (Buy to Open)", Color(0xFF10B981)), // Emerald Green (#10B981)
-    NEW_SHORTS("NEW SHORTS", "Fresh capital entering Shorts (Sell to Open)", Color(0xFFEF4444)), // Crimson Red (#EF4444)
-    SHORT_COVERING("SHORT COVERING", "Shorts forced to Buy-to-Close", Color(0xFFEAB308)), // Amber Gold (#EAB308)
-    LONG_LIQUIDATIONS("LONG LIQUIDATIONS", "Longs flushing / Sell-to-Close", Color(0xFFF97316)), // Orange (#F97316)
-    NEUTRAL("NEUTRAL / FLAT", "Waiting for next OI delta", Color(0xFF9CA3AF)); // Muted Gray (#9CA3AF)
+// 8. Flow Snapshot Model
+data class FlowSnapshot(
+    val timestampMs: Long,
+    val price: Double,
+    val openInterest: Double
+)
 
-    companion object {
-        fun compute(deltaOI: Double, deltaPrice: Double): OiRegimeTag {
-            return when {
-                deltaOI > 0.0 && deltaPrice > 0.0 -> NEW_LONGS
-                deltaOI > 0.0 && deltaPrice < 0.0 -> NEW_SHORTS
-                deltaOI < 0.0 && deltaPrice > 0.0 -> SHORT_COVERING
-                deltaOI < 0.0 && deltaPrice < 0.0 -> LONG_LIQUIDATIONS
-                else -> NEUTRAL
-            }
-        }
-    }
-}
-
-data class OiFlowRegimeState(
-    val regime: OiRegimeTag = OiRegimeTag.NEUTRAL,
+// 9. Dedicated OI Flow Regime State Model
+data class OIFlowRegimeState(
+    val regime: String = "BUILDING WINDOW",
+    val mechanics: String = "Waiting for sufficient historical data",
+    val badgeColor: Color = Color(0xFF9CA3AF),
     val priceDeltaPercent: Double = 0.0,
     val oiDeltaContracts: Double = 0.0,
-    val oiDeltaPercent: Double = 0.0
+    val oiDeltaPercent: Double = 0.0,
+    val buildingWindow: Boolean = true,
+    val cvdConfirmation: String? = null
 )
 
 // The math engine to calculate candle-specific aggression (Dip vs Dump)

@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.async
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 class CardOrderPreferences(context: Context) {
     private val prefs = context.getSharedPreferences("flow_matrix_card_prefs", Context.MODE_PRIVATE)
@@ -43,12 +45,6 @@ class CardOrderPreferences(context: Context) {
     }
 }
 
-private data class OiPriceSnapshot(
-    val timestampMs: Long,
-    val price: Double,
-    val openInterest: Double
-)
-
 data class DashboardState(
     val symbol: String = "BTCUSDT",
     val interval: String = "5m",
@@ -63,7 +59,7 @@ data class DashboardState(
     val topTraderPosition: List<TopTraderLongShortRatioResponse> = emptyList(),
     val positioningMatrix: PositioningMatrix? = null,
     val orderBookImbalance: OrderBookImbalance? = null,
-    val oiFlowRegime: OiFlowRegimeState = OiFlowRegimeState(),
+    val oiFlowRegime: OIFlowRegimeState = OIFlowRegimeState(),
     val candles: List<CandleOrderFlow> = emptyList(),
     val cardOrder: List<TelemetryCardType> = TelemetryCardType.DEFAULT_ORDER,
     val connectionMode: ConnectionMode = ConnectionMode.AUTO,
@@ -76,7 +72,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     private val wsManager = BinanceWebSocketManager()
     private val prefsManager = CardOrderPreferences(application)
 
-    private val oiSnapshots = ArrayDeque<OiPriceSnapshot>()
+    private val snapshotBuffer = ArrayDeque<FlowSnapshot>()
 
     private val _uiState = MutableStateFlow(
         DashboardState(
@@ -112,7 +108,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    private fun getLookbackWindowMs(interval: String): Long = when (interval) {
+    private fun getTimeframeDurationMs(interval: String): Long = when (interval) {
         "1m" -> 60_000L
         "5m" -> 300_000L
         "15m" -> 900_000L
@@ -215,7 +211,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun updateCoreState(symbol: String, interval: String) {
-        oiSnapshots.clear()
+        snapshotBuffer.clear()
         val effective = detectEffectiveMode(_uiState.value.connectionMode)
         _uiState.update {
             it.copy(
@@ -225,7 +221,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 liveCandle = null,
                 initialDeltaSign = InitialDeltaSign.WAITING,
                 orderBookImbalance = null,
-                oiFlowRegime = OiFlowRegimeState(),
+                oiFlowRegime = OIFlowRegimeState(),
                 activeMode = effective,
                 error = null
             )
@@ -278,38 +274,90 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 whalePositionChangeDown = whalePosRatio < prevWhalePos
             )
 
-            // Synchronize OI Flow Regime State (WebSocket Price + REST OI)
+            // --- FLOW SNAPSHOT BUFFER & OI FLOW REGIME ENGINE ---
             val currentOi = oi.lastOrNull()?.sumOpenInterest?.toDoubleOrNull() ?: 0.0
             val currentPrice = _uiState.value.liveCandle?.close
                 ?: klines.lastOrNull()?.close
                 ?: 0.0
-
             val now = System.currentTimeMillis()
+
             if (currentOi > 0.0 && currentPrice > 0.0) {
-                oiSnapshots.addLast(OiPriceSnapshot(now, currentPrice, currentOi))
+                snapshotBuffer.addLast(FlowSnapshot(now, currentPrice, currentOi))
             }
 
-            val windowMs = getLookbackWindowMs(interval)
-            val cutoff = now - windowMs
-            while (oiSnapshots.isNotEmpty() && oiSnapshots.first().timestampMs < cutoff) {
-                oiSnapshots.removeFirst()
+            // Prune snapshots older than 2 hours to prevent unbounded memory growth
+            val maxHistoryCutoff = now - 7_200_000L
+            while (snapshotBuffer.isNotEmpty() && snapshotBuffer.first().timestampMs < maxHistoryCutoff) {
+                snapshotBuffer.removeFirst()
             }
 
-            val anchor = oiSnapshots.firstOrNull() ?: oiSnapshots.lastOrNull()
-            val oiFlowRegimeState = if (anchor != null && currentOi > 0.0 && currentPrice > 0.0) {
-                val deltaOI = currentOi - anchor.openInterest
-                val deltaPrice = currentPrice - anchor.price
-                val pricePct = if (anchor.price > 0.0) (deltaPrice / anchor.price) * 100.0 else 0.0
-                val oiPct = if (anchor.openInterest > 0.0) (deltaOI / anchor.openInterest) * 100.0 else 0.0
-                val regime = OiRegimeTag.compute(deltaOI, deltaPrice)
-                OiFlowRegimeState(
-                    regime = regime,
-                    priceDeltaPercent = pricePct,
-                    oiDeltaContracts = deltaOI,
-                    oiDeltaPercent = oiPct
+            // Find newest snapshot whose age is at least targetDurationMs
+            val targetDurationMs = getTimeframeDurationMs(interval)
+            val anchorSnapshot = snapshotBuffer.lastOrNull { snapshot ->
+                (now - snapshot.timestampMs) >= targetDurationMs
+            }
+
+            val oiFlowRegimeState = if (anchorSnapshot == null) {
+                OIFlowRegimeState(
+                    regime = "BUILDING WINDOW",
+                    mechanics = "Waiting for sufficient historical data",
+                    badgeColor = Color(0xFF9CA3AF),
+                    priceDeltaPercent = 0.0,
+                    oiDeltaContracts = 0.0,
+                    oiDeltaPercent = 0.0,
+                    buildingWindow = true,
+                    cvdConfirmation = null
                 )
             } else {
-                OiFlowRegimeState()
+                val deltaPrice = currentPrice - anchorSnapshot.price
+                val deltaPricePct = if (anchorSnapshot.price > 0.0) ((currentPrice - anchorSnapshot.price) / anchorSnapshot.price) * 100.0 else 0.0
+                val deltaOI = currentOi - anchorSnapshot.openInterest
+                val deltaOIPct = if (anchorSnapshot.openInterest > 0.0) ((currentOi - anchorSnapshot.openInterest) / anchorSnapshot.openInterest) * 100.0 else 0.0
+
+                // Mandatory Noise Filter Check
+                val passesNoiseFilter = abs(deltaPricePct) >= 0.15 && abs(deltaOIPct) >= 0.25
+
+                if (!passesNoiseFilter) {
+                    OIFlowRegimeState(
+                        regime = "NEUTRAL",
+                        mechanics = "Flow expansion below threshold",
+                        badgeColor = Color(0xFF9CA3AF),
+                        priceDeltaPercent = deltaPricePct,
+                        oiDeltaContracts = deltaOI,
+                        oiDeltaPercent = deltaOIPct,
+                        buildingWindow = false,
+                        cvdConfirmation = null
+                    )
+                } else {
+                    val (regimeStr, mechanicsStr, colorVal) = when {
+                        deltaOI > 0.0 && deltaPrice > 0.0 -> Triple("NEW LONGS", "Fresh capital entering Longs (Buy-to-Open)", Color(0xFF10B981))
+                        deltaOI > 0.0 && deltaPrice < 0.0 -> Triple("NEW SHORTS", "Fresh capital entering Shorts (Sell-to-Open)", Color(0xFFEF4444))
+                        deltaOI < 0.0 && deltaPrice > 0.0 -> Triple("SHORT COVERING", "Shorts buying back positions (Buy-to-Close)", Color(0xFFEAB308))
+                        deltaOI < 0.0 && deltaPrice < 0.0 -> Triple("LONG LIQUIDATIONS", "Longs exiting positions (Sell-to-Close)", Color(0xFFF97316))
+                        else -> Triple("NEUTRAL", "Waiting for next OI delta", Color(0xFF9CA3AF))
+                    }
+
+                    // Optional CVD Confirmation
+                    val currentCvd = klines.sumOf { it.volumeDelta }
+                    val cvdConfirm = when {
+                        regimeStr == "NEW LONGS" && currentCvd > 0.0 -> "CVD CONFIRMED"
+                        regimeStr == "NEW SHORTS" && currentCvd < 0.0 -> "CVD CONFIRMED"
+                        regimeStr == "NEW LONGS" && currentCvd < 0.0 -> "DIVERGENCE"
+                        regimeStr == "NEW SHORTS" && currentCvd > 0.0 -> "DIVERGENCE"
+                        else -> null
+                    }
+
+                    OIFlowRegimeState(
+                        regime = regimeStr,
+                        mechanics = mechanicsStr,
+                        badgeColor = colorVal,
+                        priceDeltaPercent = deltaPricePct,
+                        oiDeltaContracts = deltaOI,
+                        oiDeltaPercent = deltaOIPct,
+                        buildingWindow = false,
+                        cvdConfirmation = cvdConfirm
+                    )
+                }
             }
 
             // Calculate initial REST depth fallback ONLY if real-time WS imbalance is not yet set
