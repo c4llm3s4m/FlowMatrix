@@ -340,7 +340,7 @@ fun MetricCard(
     }
 }
 
-// NEW: Core 4-Quadrant OI Flow Regime Card
+// ENHANCED: Core 4-Quadrant OI Flow Regime Card (7 Rows Total)
 @Composable
 fun OiFlowRegimeCard(
     regimeState: OIFlowRegimeState,
@@ -357,7 +357,7 @@ fun OiFlowRegimeCard(
         onMoveUp = onMoveUp,
         onMoveDown = onMoveDown
     ) {
-        // Row 1: Active Regime Badge
+        // ROW 1: Active Regime Badge
         Row(
             modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -380,7 +380,7 @@ fun OiFlowRegimeCard(
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-        // Row 2: Price Delta (Window)
+        // ROW 2: Price Delta (Window)
         val priceColor = when {
             regimeState.buildingWindow || regimeState.priceDeltaPercent == 0.0 -> MaterialTheme.colorScheme.onSurface
             regimeState.priceDeltaPercent > 0.0 -> GreenPositive
@@ -393,7 +393,7 @@ fun OiFlowRegimeCard(
             valueColor = priceColor
         )
 
-        // Row 3: OI Delta (Contracts)
+        // ROW 3: OI Delta (Contracts)
         val oiColor = when {
             regimeState.buildingWindow || regimeState.oiDeltaContracts == 0.0 -> MaterialTheme.colorScheme.onSurface
             regimeState.oiDeltaContracts > 0.0 -> GreenPositive
@@ -407,9 +407,9 @@ fun OiFlowRegimeCard(
             valueColor = oiColor
         )
 
-        // Row 4: Mechanics Subtext
+        // ROW 4: Mechanics Subtext
         Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -422,27 +422,65 @@ fun OiFlowRegimeCard(
             )
         }
 
-        // Optional Row 5: CVD Confirmation / Divergence
-        if (!regimeState.buildingWindow && regimeState.cvdConfirmation != null) {
+        // ROW 5: Strength Engine (LOW, MEDIUM, HIGH)
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Strength", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Surface(
+                color = regimeState.strengthColor.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(
+                    text = regimeState.strength,
+                    color = regimeState.strengthColor,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+            }
+        }
+
+        // ROW 6: Confirmation Engine (CVD CONFIRMED / DIVERGENCE)
+        if (!regimeState.buildingWindow && regimeState.confirmation != null) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("Confirmation", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                val cvdColor = if (regimeState.cvdConfirmation == "CVD CONFIRMED") GreenPositive else GoldNeutral
+                val cvdColor = if (regimeState.confirmation == "CVD CONFIRMED") Color(0xFF10B981) else Color(0xFFF97316)
                 Surface(
                     color = cvdColor.copy(alpha = 0.15f),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Text(
-                        text = regimeState.cvdConfirmation,
+                        text = regimeState.confirmation,
                         color = cvdColor,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                     )
                 }
+            }
+        }
+
+        // ROW 7: Transition Tracking Engine (e.g. SHORT COVERING → NEW LONGS)
+        if (!regimeState.buildingWindow && regimeState.previousRegime != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Transition", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    text = regimeState.previousRegime,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
             }
         }
     }

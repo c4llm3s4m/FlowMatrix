@@ -150,16 +150,19 @@ data class FlowSnapshot(
     val openInterest: Double
 )
 
-// 9. Dedicated OI Flow Regime State Model
+// 9. Dedicated OI Flow Regime State Model (Enhanced Version)
 data class OIFlowRegimeState(
     val regime: String = "BUILDING WINDOW",
     val mechanics: String = "Waiting for sufficient historical data",
     val badgeColor: Color = Color(0xFF9CA3AF),
+    val strength: String = "NONE",
+    val strengthColor: Color = Color(0xFF9CA3AF),
+    val confirmation: String? = null,
+    val previousRegime: String? = null,
     val priceDeltaPercent: Double = 0.0,
     val oiDeltaContracts: Double = 0.0,
     val oiDeltaPercent: Double = 0.0,
-    val buildingWindow: Boolean = true,
-    val cvdConfirmation: String? = null
+    val buildingWindow: Boolean = true
 )
 
 // The math engine to calculate candle-specific aggression (Dip vs Dump)

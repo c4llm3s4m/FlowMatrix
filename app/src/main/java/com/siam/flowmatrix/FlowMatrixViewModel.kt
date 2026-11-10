@@ -45,6 +45,8 @@ class CardOrderPreferences(context: Context) {
     }
 }
 
+
+
 data class DashboardState(
     val symbol: String = "BTCUSDT",
     val interval: String = "5m",
@@ -73,6 +75,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     private val prefsManager = CardOrderPreferences(application)
 
     private val snapshotBuffer = ArrayDeque<FlowSnapshot>()
+    private var lastValidRegime: String? = null
 
     private val _uiState = MutableStateFlow(
         DashboardState(
@@ -212,6 +215,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
 
     private fun updateCoreState(symbol: String, interval: String) {
         snapshotBuffer.clear()
+        lastValidRegime = null
         val effective = detectEffectiveMode(_uiState.value.connectionMode)
         _uiState.update {
             it.copy(
@@ -274,7 +278,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 whalePositionChangeDown = whalePosRatio < prevWhalePos
             )
 
-            // --- FLOW SNAPSHOT BUFFER & OI FLOW REGIME ENGINE ---
+            // --- FLOW SNAPSHOT BUFFER & ENHANCED REGIME ENGINE ---
             val currentOi = oi.lastOrNull()?.sumOpenInterest?.toDoubleOrNull() ?: 0.0
             val currentPrice = _uiState.value.liveCandle?.close
                 ?: klines.lastOrNull()?.close
@@ -291,7 +295,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 snapshotBuffer.removeFirst()
             }
 
-            // Find newest snapshot whose age is at least targetDurationMs
+            // Locate newest snapshot whose age is at least targetDurationMs
             val targetDurationMs = getTimeframeDurationMs(interval)
             val anchorSnapshot = snapshotBuffer.lastOrNull { snapshot ->
                 (now - snapshot.timestampMs) >= targetDurationMs
@@ -302,11 +306,14 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                     regime = "BUILDING WINDOW",
                     mechanics = "Waiting for sufficient historical data",
                     badgeColor = Color(0xFF9CA3AF),
+                    strength = "NONE",
+                    strengthColor = Color(0xFF9CA3AF),
+                    confirmation = null,
+                    previousRegime = lastValidRegime,
                     priceDeltaPercent = 0.0,
                     oiDeltaContracts = 0.0,
                     oiDeltaPercent = 0.0,
-                    buildingWindow = true,
-                    cvdConfirmation = null
+                    buildingWindow = true
                 )
             } else {
                 val deltaPrice = currentPrice - anchorSnapshot.price
@@ -314,19 +321,22 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 val deltaOI = currentOi - anchorSnapshot.openInterest
                 val deltaOIPct = if (anchorSnapshot.openInterest > 0.0) ((currentOi - anchorSnapshot.openInterest) / anchorSnapshot.openInterest) * 100.0 else 0.0
 
-                // Mandatory Noise Filter Check
-                val passesNoiseFilter = abs(deltaPricePct) >= 0.15 && abs(deltaOIPct) >= 0.25
+                // Mandatory Significance Filter Check
+                val passesSignificanceFilter = abs(deltaPricePct) >= 0.15 && abs(deltaOIPct) >= 0.25
 
-                if (!passesNoiseFilter) {
+                if (!passesSignificanceFilter) {
                     OIFlowRegimeState(
                         regime = "NEUTRAL",
                         mechanics = "Flow expansion below threshold",
                         badgeColor = Color(0xFF9CA3AF),
+                        strength = "LOW",
+                        strengthColor = Color(0xFF9CA3AF),
+                        confirmation = null,
+                        previousRegime = lastValidRegime,
                         priceDeltaPercent = deltaPricePct,
                         oiDeltaContracts = deltaOI,
                         oiDeltaPercent = deltaOIPct,
-                        buildingWindow = false,
-                        cvdConfirmation = null
+                        buildingWindow = false
                     )
                 } else {
                     val (regimeStr, mechanicsStr, colorVal) = when {
@@ -337,13 +347,44 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                         else -> Triple("NEUTRAL", "Waiting for next OI delta", Color(0xFF9CA3AF))
                     }
 
-                    // Optional CVD Confirmation
+                    // Regime Strength Engine
+                    val absOI = abs(deltaOIPct)
+                    val oiScore = when {
+                        absOI >= 3.0 -> 3
+                        absOI >= 1.0 -> 2
+                        else -> 1
+                    }
+
+                    val absPrice = abs(deltaPricePct)
+                    val priceScore = when {
+                        absPrice >= 3.0 -> 3
+                        absPrice >= 1.0 -> 2
+                        else -> 1
+                    }
+
+                    val totalStrengthScore = oiScore + priceScore
+                    val (strengthText, strColor) = when {
+                        totalStrengthScore >= 5 -> "HIGH" to Color(0xFF10B981)
+                        totalStrengthScore >= 3 -> "MEDIUM" to Color(0xFFEAB308)
+                        else -> "LOW" to Color(0xFF9CA3AF)
+                    }
+
+                    // Transition Tracking Engine
+                    val prevRegime = lastValidRegime
+                    val transitionStr = if (prevRegime != null && prevRegime != regimeStr) {
+                        "$prevRegime → $regimeStr"
+                    } else null
+
+                    if (regimeStr != "NEUTRAL" && regimeStr != lastValidRegime) {
+                        lastValidRegime = regimeStr
+                    }
+
+                    // CVD Confirmation Engine
                     val currentCvd = klines.sumOf { it.volumeDelta }
                     val cvdConfirm = when {
                         regimeStr == "NEW LONGS" && currentCvd > 0.0 -> "CVD CONFIRMED"
                         regimeStr == "NEW SHORTS" && currentCvd < 0.0 -> "CVD CONFIRMED"
-                        regimeStr == "NEW LONGS" && currentCvd < 0.0 -> "DIVERGENCE"
-                        regimeStr == "NEW SHORTS" && currentCvd > 0.0 -> "DIVERGENCE"
+                        (regimeStr == "NEW LONGS" && currentCvd < 0.0) || (regimeStr == "NEW SHORTS" && currentCvd > 0.0) -> "DIVERGENCE"
                         else -> null
                     }
 
@@ -351,11 +392,14 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                         regime = regimeStr,
                         mechanics = mechanicsStr,
                         badgeColor = colorVal,
+                        strength = strengthText,
+                        strengthColor = strColor,
+                        confirmation = cvdConfirm,
+                        previousRegime = transitionStr,
                         priceDeltaPercent = deltaPricePct,
                         oiDeltaContracts = deltaOI,
                         oiDeltaPercent = deltaOIPct,
-                        buildingWindow = false,
-                        cvdConfirmation = cvdConfirm
+                        buildingWindow = false
                     )
                 }
             }
