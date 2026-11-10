@@ -23,6 +23,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.siam.flowmatrix.ui.theme.FlowMatrixTheme
+import kotlin.math.abs
 
 // High-Contrast Color Palette
 val GreenPositive = Color(0xFF00C853)
@@ -264,10 +265,12 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                         TelemetryCardType.OI_FLOW_REGIME -> OiFlowRegimeCard(
                             regimeState = state.oiFlowRegime,
                             interval = state.interval,
+                            symbol = state.symbol,
                             isFirst = isFirst,
                             isLast = isLast,
                             onMoveUp = { viewModel.moveCardUp(cardType) },
-                            onMoveDown = { viewModel.moveCardDown(cardType) }
+                            onMoveDown = { viewModel.moveCardDown(cardType) },
+                            onToggleDebug = { viewModel.toggleOiDebugMode() }
                         )
                         TelemetryCardType.CVD_CHART -> CvdCard(
                             candles = state.candles,
@@ -284,7 +287,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
     }
 }
 
-// Reusable Metric Card Container with Subtle Reorder Up/Down Controls
+// Reusable Metric Card Container with Subtle Reorder Up/Down Controls & Optional Action
 @Composable
 fun MetricCard(
     title: String,
@@ -292,6 +295,7 @@ fun MetricCard(
     isLast: Boolean = false,
     onMoveUp: () -> Unit = {},
     onMoveDown: () -> Unit = {},
+    headerExtra: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
     Card(
@@ -305,7 +309,13 @@ fun MetricCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(text = title, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = title, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
+                    if (headerExtra != null) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        headerExtra()
+                    }
+                }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
@@ -340,22 +350,41 @@ fun MetricCard(
     }
 }
 
-// ENHANCED: Core 4-Quadrant OI Flow Regime Card (7 Rows Total)
+// ENHANCED: Core 4-Quadrant OI Flow Regime Card with Collapsible Diagnostics / Debug Section
 @Composable
 fun OiFlowRegimeCard(
     regimeState: OIFlowRegimeState,
     interval: String,
+    symbol: String,
     isFirst: Boolean,
     isLast: Boolean,
     onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit
+    onMoveDown: () -> Unit,
+    onToggleDebug: () -> Unit
 ) {
+    val debug = regimeState.debugState
+
     MetricCard(
         title = "OI Flow Regime (Live Delta)",
         isFirst = isFirst,
         isLast = isLast,
         onMoveUp = onMoveUp,
-        onMoveDown = onMoveDown
+        onMoveDown = onMoveDown,
+        headerExtra = {
+            Surface(
+                onClick = onToggleDebug,
+                color = if (debug.isDebugEnabled) MaterialTheme.colorScheme.primaryContainer else Color.Gray.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text(
+                    text = "[DEBUG]",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (debug.isDebugEnabled) MaterialTheme.colorScheme.onPrimaryContainer else Color.Gray,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+        }
     ) {
         // ROW 1: Active Regime Badge
         Row(
@@ -481,6 +510,120 @@ fun OiFlowRegimeCard(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
                 )
+            }
+        }
+
+        // --- COLLAPSIBLE DIAGNOSTICS / DEBUG SECTION ---
+        if (debug.isDebugEnabled) {
+            Spacer(modifier = Modifier.height(8.dp))
+            HorizontalDivider(color = GoldNeutral.copy(alpha = 0.4f))
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("🛠 DIAGNOSTICS / DEBUG MODE", fontSize = 11.sp, fontWeight = FontWeight.Black, color = GoldNeutral)
+
+                // FAILURE DETECTION WARNING BANNERS
+                debug.warnings.forEach { warning ->
+                    Surface(
+                        color = GoldNeutral.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = warning,
+                            color = GoldNeutral,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+
+                DebugHeader("SYSTEM STATE")
+                DebugRow("Current Symbol", symbol)
+                DebugRow("Active Timeframe", interval)
+                DebugRow("Current Regime", regimeState.regime)
+                DebugRow("Building Window", if (regimeState.buildingWindow) "TRUE" else "FALSE")
+
+                DebugHeader("SNAPSHOT BUFFER")
+                DebugRow("Snapshot Count", "${debug.snapshotCount}")
+                DebugRow("Required Window", "${debug.requiredWindowSec} sec")
+                DebugRow("Oldest Snapshot Age", "${debug.oldestSnapshotAgeSec} sec")
+                DebugRow("Anchor Snapshot Age", "${debug.anchorSnapshotAgeSec} sec")
+                DebugRow("Latest Snapshot Age", "${debug.latestSnapshotAgeSec} sec")
+                DebugRow("Buffer Status", debug.bufferStatus, if (debug.bufferStatus == "READY") GreenPositive else Color.Gray)
+
+                DebugHeader("CURRENT VALUES")
+                DebugRow("Current Price", String.format("$%.5f", debug.currentPrice))
+                DebugRow("Anchor Price", String.format("$%.5f", debug.anchorPrice))
+                DebugRow("Current OI", String.format("%,.0f", debug.currentOi))
+                DebugRow("Anchor OI", String.format("%,.0f", debug.anchorOi))
+
+                DebugHeader("CALCULATED VALUES")
+                DebugRow("Price Delta", String.format("%+.5f", debug.priceDelta))
+                DebugRow("Price Delta %", String.format("%+.2f%%", debug.priceDeltaPercent))
+                DebugRow("OI Delta", String.format("%+,.0f", debug.oiDelta))
+                DebugRow("OI Delta %", String.format("%+.2f%%", debug.oiDeltaPercent))
+
+                DebugHeader("THRESHOLD CHECKS")
+                DebugRow("Price Threshold (Req 0.15%)", String.format("Actual: %.2f%%", abs(debug.priceDeltaPercent)), if (debug.priceThresholdPass) GreenPositive else CoralNegative, if (debug.priceThresholdPass) "PASS" else "FAIL")
+                DebugRow("OI Threshold (Req 0.25%)", String.format("Actual: %.2f%%", abs(debug.oiDeltaPercent)), if (debug.oiThresholdPass) GreenPositive else CoralNegative, if (debug.oiThresholdPass) "PASS" else "FAIL")
+                DebugRow("Overall Threshold", if (debug.overallThresholdPass) "PASS" else "FAIL", if (debug.overallThresholdPass) GreenPositive else CoralNegative)
+
+                DebugHeader("REGIME ENGINE DEBUG")
+                DebugRow("Regime Logic", debug.regimeLogicCondition)
+                DebugRow("Classification", regimeState.regime, regimeState.badgeColor)
+
+                DebugHeader("STRENGTH ENGINE DEBUG")
+                DebugRow("OI Score", "+${debug.oiScore}")
+                DebugRow("Price Score", "+${debug.priceScore}")
+                DebugRow("Total Score / Strength", "${debug.totalScore} [${regimeState.strength}]", regimeState.strengthColor)
+
+                DebugHeader("CVD CONFIRMATION DEBUG")
+                DebugRow("Current CVD", String.format("%+,.0f", debug.currentCvd))
+                DebugRow("CVD Direction", debug.cvdDirection)
+                DebugRow("Confirmation Result", regimeState.confirmation ?: "NONE")
+
+                DebugHeader("TRANSITION DEBUG")
+                DebugRow("Previous Regime", regimeState.previousRegime ?: "NONE")
+                DebugRow("Transition Age", if (debug.transitionTimeSecAgo != null) "${debug.transitionTimeSecAgo} sec ago" else "--")
+
+                DebugHeader("POLLING DEBUG")
+                DebugRow("Last OI Poll", debug.lastOiPollTimeFormatted)
+                DebugRow("Ms Since Poll", "${debug.msSinceOiPoll} ms")
+                DebugRow("Last Price Tick", debug.lastPriceTickTimeFormatted)
+                DebugRow("Ms Since Price Tick", "${debug.msSincePriceTick} ms")
+            }
+        }
+    }
+}
+
+@Composable
+fun DebugHeader(text: String) {
+    Text(
+        text = text,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Black,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 4.dp)
+    )
+}
+
+@Composable
+fun DebugRow(label: String, value: String, valueColor: Color = Color.Gray, badge: String? = null) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(value, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = valueColor)
+            if (badge != null) {
+                Spacer(modifier = Modifier.width(4.dp))
+                Surface(color = valueColor.copy(alpha = 0.2f), shape = RoundedCornerShape(4.dp)) {
+                    Text(badge, fontSize = 9.sp, fontWeight = FontWeight.Black, color = valueColor, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                }
             }
         }
     }

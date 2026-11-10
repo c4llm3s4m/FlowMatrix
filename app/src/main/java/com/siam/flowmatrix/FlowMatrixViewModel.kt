@@ -16,6 +16,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.abs
 
 class CardOrderPreferences(context: Context) {
@@ -44,8 +47,6 @@ class CardOrderPreferences(context: Context) {
         prefs.edit().putString("connection_mode_v1", mode.id).apply()
     }
 }
-
-
 
 data class DashboardState(
     val symbol: String = "BTCUSDT",
@@ -76,6 +77,12 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
 
     private val snapshotBuffer = ArrayDeque<FlowSnapshot>()
     private var lastValidRegime: String? = null
+    private var lastOiPollTimeMs: Long = 0L
+    private var lastPriceTickTimeMs: Long = 0L
+    private var lastRegimeTransitionTimeMs: Long = 0L
+
+    private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.US)
+    private val millisFormatter = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
     private val _uiState = MutableStateFlow(
         DashboardState(
@@ -126,6 +133,14 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         wsManager.connect(_uiState.value.symbol, _uiState.value.interval, effective)
     }
 
+    fun toggleOiDebugMode() {
+        _uiState.update {
+            val currentDebug = it.oiFlowRegime.debugState
+            val toggled = currentDebug.copy(isDebugEnabled = !currentDebug.isDebugEnabled)
+            it.copy(oiFlowRegime = it.oiFlowRegime.copy(debugState = toggled))
+        }
+    }
+
     fun moveCardUp(card: TelemetryCardType) {
         val current = _uiState.value.cardOrder.toMutableList()
         val index = current.indexOf(card)
@@ -160,6 +175,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             wsManager.liveCandle.collect { liveTick ->
                 if (liveTick != null) {
+                    lastPriceTickTimeMs = System.currentTimeMillis()
                     _uiState.update { it.copy(liveCandle = liveTick) }
                 }
             }
@@ -216,6 +232,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     private fun updateCoreState(symbol: String, interval: String) {
         snapshotBuffer.clear()
         lastValidRegime = null
+        lastRegimeTransitionTimeMs = 0L
         val effective = detectEffectiveMode(_uiState.value.connectionMode)
         _uiState.update {
             it.copy(
@@ -225,7 +242,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 liveCandle = null,
                 initialDeltaSign = InitialDeltaSign.WAITING,
                 orderBookImbalance = null,
-                oiFlowRegime = OIFlowRegimeState(),
+                oiFlowRegime = OIFlowRegimeState(debugState = it.oiFlowRegime.debugState.copy(warnings = listOf("WARNING: Window Building"))),
                 activeMode = effective,
                 error = null
             )
@@ -278,18 +295,19 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 whalePositionChangeDown = whalePosRatio < prevWhalePos
             )
 
-            // --- FLOW SNAPSHOT BUFFER & ENHANCED REGIME ENGINE ---
+            // --- FLOW SNAPSHOT BUFFER & DIAGNOSTIC ENGINE ---
             val currentOi = oi.lastOrNull()?.sumOpenInterest?.toDoubleOrNull() ?: 0.0
             val currentPrice = _uiState.value.liveCandle?.close
                 ?: klines.lastOrNull()?.close
                 ?: 0.0
             val now = System.currentTimeMillis()
+            lastOiPollTimeMs = now
 
             if (currentOi > 0.0 && currentPrice > 0.0) {
                 snapshotBuffer.addLast(FlowSnapshot(now, currentPrice, currentOi))
             }
 
-            // Prune snapshots older than 2 hours to prevent unbounded memory growth
+            // Prune snapshots older than 2 hours
             val maxHistoryCutoff = now - 7_200_000L
             while (snapshotBuffer.isNotEmpty() && snapshotBuffer.first().timestampMs < maxHistoryCutoff) {
                 snapshotBuffer.removeFirst()
@@ -301,7 +319,51 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 (now - snapshot.timestampMs) >= targetDurationMs
             }
 
+            val warningsList = mutableListOf<String>()
+            if (snapshotBuffer.isEmpty()) warningsList.add("WARNING: Snapshot Buffer Empty")
+            if (anchorSnapshot == null) warningsList.add("WARNING: Anchor Snapshot Missing")
+            if (anchorSnapshot != null && snapshotBuffer.isNotEmpty() && anchorSnapshot.timestampMs == snapshotBuffer.last().timestampMs) {
+                warningsList.add("WARNING: Anchor Equals Current Snapshot")
+            }
+            if (lastOiPollTimeMs > 0 && (now - lastOiPollTimeMs > 90_000L)) warningsList.add("WARNING: OI Poll Stalled")
+            if (lastPriceTickTimeMs > 0 && (now - lastPriceTickTimeMs > 10_000L)) warningsList.add("WARNING: Price Feed Stalled")
+            if (anchorSnapshot == null) warningsList.add("WARNING: Window Building")
+
+            val isDebugActive = _uiState.value.oiFlowRegime.debugState.isDebugEnabled
+
             val oiFlowRegimeState = if (anchorSnapshot == null) {
+                val debugState = OiFlowRegimeDebugState(
+                    isDebugEnabled = isDebugActive,
+                    snapshotCount = snapshotBuffer.size,
+                    requiredWindowSec = targetDurationMs / 1000L,
+                    oldestSnapshotAgeSec = if (snapshotBuffer.isNotEmpty()) (now - snapshotBuffer.first().timestampMs) / 1000L else 0L,
+                    anchorSnapshotAgeSec = 0L,
+                    latestSnapshotAgeSec = if (snapshotBuffer.isNotEmpty()) (now - snapshotBuffer.last().timestampMs) / 1000L else 0L,
+                    bufferStatus = "BUILDING",
+                    currentPrice = currentPrice,
+                    anchorPrice = 0.0,
+                    currentOi = currentOi,
+                    anchorOi = 0.0,
+                    priceDelta = 0.0,
+                    priceDeltaPercent = 0.0,
+                    oiDelta = 0.0,
+                    oiDeltaPercent = 0.0,
+                    priceThresholdPass = false,
+                    oiThresholdPass = false,
+                    overallThresholdPass = false,
+                    regimeLogicCondition = "BUILDING",
+                    oiScore = 0,
+                    priceScore = 0,
+                    totalScore = 0,
+                    currentCvd = klines.sumOf { it.volumeDelta },
+                    cvdDirection = "NONE",
+                    transitionTimeSecAgo = null,
+                    lastOiPollTimeFormatted = timeFormatter.format(Date(now)),
+                    msSinceOiPoll = 0L,
+                    lastPriceTickTimeFormatted = if (lastPriceTickTimeMs > 0) millisFormatter.format(Date(lastPriceTickTimeMs)) else "--:--:--.---",
+                    msSincePriceTick = if (lastPriceTickTimeMs > 0) now - lastPriceTickTimeMs else 0L,
+                    warnings = warningsList
+                )
                 OIFlowRegimeState(
                     regime = "BUILDING WINDOW",
                     mechanics = "Waiting for sufficient historical data",
@@ -313,7 +375,8 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                     priceDeltaPercent = 0.0,
                     oiDeltaContracts = 0.0,
                     oiDeltaPercent = 0.0,
-                    buildingWindow = true
+                    buildingWindow = true,
+                    debugState = debugState
                 )
             } else {
                 val deltaPrice = currentPrice - anchorSnapshot.price
@@ -321,10 +384,46 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 val deltaOI = currentOi - anchorSnapshot.openInterest
                 val deltaOIPct = if (anchorSnapshot.openInterest > 0.0) ((currentOi - anchorSnapshot.openInterest) / anchorSnapshot.openInterest) * 100.0 else 0.0
 
-                // Mandatory Significance Filter Check
-                val passesSignificanceFilter = abs(deltaPricePct) >= 0.15 && abs(deltaOIPct) >= 0.25
+                val pricePass = abs(deltaPricePct) >= 0.15
+                val oiPass = abs(deltaOIPct) >= 0.25
+                val passesSignificanceFilter = pricePass && oiPass
+
+                val currentCvd = klines.sumOf { it.volumeDelta }
+                val cvdDir = if (currentCvd > 0.0) "POSITIVE" else if (currentCvd < 0.0) "NEGATIVE" else "ZERO"
 
                 if (!passesSignificanceFilter) {
+                    val debugState = OiFlowRegimeDebugState(
+                        isDebugEnabled = isDebugActive,
+                        snapshotCount = snapshotBuffer.size,
+                        requiredWindowSec = targetDurationMs / 1000L,
+                        oldestSnapshotAgeSec = (now - snapshotBuffer.first().timestampMs) / 1000L,
+                        anchorSnapshotAgeSec = (now - anchorSnapshot.timestampMs) / 1000L,
+                        latestSnapshotAgeSec = (now - snapshotBuffer.last().timestampMs) / 1000L,
+                        bufferStatus = "READY",
+                        currentPrice = currentPrice,
+                        anchorPrice = anchorSnapshot.price,
+                        currentOi = currentOi,
+                        anchorOi = anchorSnapshot.openInterest,
+                        priceDelta = deltaPrice,
+                        priceDeltaPercent = deltaPricePct,
+                        oiDelta = deltaOI,
+                        oiDeltaPercent = deltaOIPct,
+                        priceThresholdPass = pricePass,
+                        oiThresholdPass = oiPass,
+                        overallThresholdPass = false,
+                        regimeLogicCondition = "abs(deltaPricePct) < 0.15 || abs(deltaOIPct) < 0.25",
+                        oiScore = 0,
+                        priceScore = 0,
+                        totalScore = 0,
+                        currentCvd = currentCvd,
+                        cvdDirection = cvdDir,
+                        transitionTimeSecAgo = if (lastRegimeTransitionTimeMs > 0) (now - lastRegimeTransitionTimeMs) / 1000L else null,
+                        lastOiPollTimeFormatted = timeFormatter.format(Date(now)),
+                        msSinceOiPoll = 0L,
+                        lastPriceTickTimeFormatted = if (lastPriceTickTimeMs > 0) millisFormatter.format(Date(lastPriceTickTimeMs)) else "--:--:--.---",
+                        msSincePriceTick = if (lastPriceTickTimeMs > 0) now - lastPriceTickTimeMs else 0L,
+                        warnings = warningsList
+                    )
                     OIFlowRegimeState(
                         regime = "NEUTRAL",
                         mechanics = "Flow expansion below threshold",
@@ -336,18 +435,19 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                         priceDeltaPercent = deltaPricePct,
                         oiDeltaContracts = deltaOI,
                         oiDeltaPercent = deltaOIPct,
-                        buildingWindow = false
+                        buildingWindow = false,
+                        debugState = debugState
                     )
                 } else {
-                    val (regimeStr, mechanicsStr, colorVal) = when {
-                        deltaOI > 0.0 && deltaPrice > 0.0 -> Triple("NEW LONGS", "Fresh capital entering Longs (Buy-to-Open)", Color(0xFF10B981))
-                        deltaOI > 0.0 && deltaPrice < 0.0 -> Triple("NEW SHORTS", "Fresh capital entering Shorts (Sell-to-Open)", Color(0xFFEF4444))
-                        deltaOI < 0.0 && deltaPrice > 0.0 -> Triple("SHORT COVERING", "Shorts buying back positions (Buy-to-Close)", Color(0xFFEAB308))
-                        deltaOI < 0.0 && deltaPrice < 0.0 -> Triple("LONG LIQUIDATIONS", "Longs exiting positions (Sell-to-Close)", Color(0xFFF97316))
-                        else -> Triple("NEUTRAL", "Waiting for next OI delta", Color(0xFF9CA3AF))
+                    val (regimeStr, mechanicsStr, colorVal, logicCond) = when {
+                        deltaOI > 0.0 && deltaPrice > 0.0 -> Quadruple("NEW LONGS", "Fresh capital entering Longs (Buy-to-Open)", Color(0xFF10B981), "deltaOI > 0 && deltaPrice > 0")
+                        deltaOI > 0.0 && deltaPrice < 0.0 -> Quadruple("NEW SHORTS", "Fresh capital entering Shorts (Sell-to-Open)", Color(0xFFEF4444), "deltaOI > 0 && deltaPrice < 0")
+                        deltaOI < 0.0 && deltaPrice > 0.0 -> Quadruple("SHORT COVERING", "Shorts buying back positions (Buy-to-Close)", Color(0xFFEAB308), "deltaOI < 0 && deltaPrice > 0")
+                        deltaOI < 0.0 && deltaPrice < 0.0 -> Quadruple("LONG LIQUIDATIONS", "Longs exiting positions (Sell-to-Close)", Color(0xFFF97316), "deltaOI < 0 && deltaPrice < 0")
+                        else -> Quadruple("NEUTRAL", "Waiting for next OI delta", Color(0xFF9CA3AF), "deltaOI == 0")
                     }
 
-                    // Regime Strength Engine
+                    // Strength Engine
                     val absOI = abs(deltaOIPct)
                     val oiScore = when {
                         absOI >= 3.0 -> 3
@@ -377,16 +477,48 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
 
                     if (regimeStr != "NEUTRAL" && regimeStr != lastValidRegime) {
                         lastValidRegime = regimeStr
+                        lastRegimeTransitionTimeMs = now
                     }
 
-                    // CVD Confirmation Engine
-                    val currentCvd = klines.sumOf { it.volumeDelta }
                     val cvdConfirm = when {
                         regimeStr == "NEW LONGS" && currentCvd > 0.0 -> "CVD CONFIRMED"
                         regimeStr == "NEW SHORTS" && currentCvd < 0.0 -> "CVD CONFIRMED"
                         (regimeStr == "NEW LONGS" && currentCvd < 0.0) || (regimeStr == "NEW SHORTS" && currentCvd > 0.0) -> "DIVERGENCE"
                         else -> null
                     }
+
+                    val debugState = OiFlowRegimeDebugState(
+                        isDebugEnabled = isDebugActive,
+                        snapshotCount = snapshotBuffer.size,
+                        requiredWindowSec = targetDurationMs / 1000L,
+                        oldestSnapshotAgeSec = (now - snapshotBuffer.first().timestampMs) / 1000L,
+                        anchorSnapshotAgeSec = (now - anchorSnapshot.timestampMs) / 1000L,
+                        latestSnapshotAgeSec = (now - snapshotBuffer.last().timestampMs) / 1000L,
+                        bufferStatus = "READY",
+                        currentPrice = currentPrice,
+                        anchorPrice = anchorSnapshot.price,
+                        currentOi = currentOi,
+                        anchorOi = anchorSnapshot.openInterest,
+                        priceDelta = deltaPrice,
+                        priceDeltaPercent = deltaPricePct,
+                        oiDelta = deltaOI,
+                        oiDeltaPercent = deltaOIPct,
+                        priceThresholdPass = pricePass,
+                        oiThresholdPass = oiPass,
+                        overallThresholdPass = true,
+                        regimeLogicCondition = logicCond,
+                        oiScore = oiScore,
+                        priceScore = priceScore,
+                        totalScore = totalStrengthScore,
+                        currentCvd = currentCvd,
+                        cvdDirection = cvdDir,
+                        transitionTimeSecAgo = if (lastRegimeTransitionTimeMs > 0) (now - lastRegimeTransitionTimeMs) / 1000L else null,
+                        lastOiPollTimeFormatted = timeFormatter.format(Date(now)),
+                        msSinceOiPoll = 0L,
+                        lastPriceTickTimeFormatted = if (lastPriceTickTimeMs > 0) millisFormatter.format(Date(lastPriceTickTimeMs)) else "--:--:--.---",
+                        msSincePriceTick = if (lastPriceTickTimeMs > 0) now - lastPriceTickTimeMs else 0L,
+                        warnings = warningsList
+                    )
 
                     OIFlowRegimeState(
                         regime = regimeStr,
@@ -399,7 +531,8 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                         priceDeltaPercent = deltaPricePct,
                         oiDeltaContracts = deltaOI,
                         oiDeltaPercent = deltaOIPct,
-                        buildingWindow = false
+                        buildingWindow = false,
+                        debugState = debugState
                     )
                 }
             }
@@ -456,3 +589,5 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         wsManager.disconnect()
     }
 }
+
+private data class Quadruple<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)

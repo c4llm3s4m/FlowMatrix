@@ -150,7 +150,41 @@ data class FlowSnapshot(
     val openInterest: Double
 )
 
-// 9. Dedicated OI Flow Regime State Model (Enhanced Version)
+// 9. OI Flow Regime Diagnostics / Debug State Model
+data class OiFlowRegimeDebugState(
+    val isDebugEnabled: Boolean = false,
+    val snapshotCount: Int = 0,
+    val requiredWindowSec: Long = 300L,
+    val oldestSnapshotAgeSec: Long = 0L,
+    val anchorSnapshotAgeSec: Long = 0L,
+    val latestSnapshotAgeSec: Long = 0L,
+    val bufferStatus: String = "BUILDING",
+    val currentPrice: Double = 0.0,
+    val anchorPrice: Double = 0.0,
+    val currentOi: Double = 0.0,
+    val anchorOi: Double = 0.0,
+    val priceDelta: Double = 0.0,
+    val priceDeltaPercent: Double = 0.0,
+    val oiDelta: Double = 0.0,
+    val oiDeltaPercent: Double = 0.0,
+    val priceThresholdPass: Boolean = false,
+    val oiThresholdPass: Boolean = false,
+    val overallThresholdPass: Boolean = false,
+    val regimeLogicCondition: String = "BUILDING",
+    val oiScore: Int = 0,
+    val priceScore: Int = 0,
+    val totalScore: Int = 0,
+    val currentCvd: Double = 0.0,
+    val cvdDirection: String = "NONE",
+    val transitionTimeSecAgo: Long? = null,
+    val lastOiPollTimeFormatted: String = "--:--:--",
+    val msSinceOiPoll: Long = 0L,
+    val lastPriceTickTimeFormatted: String = "--:--:--.---",
+    val msSincePriceTick: Long = 0L,
+    val warnings: List<String> = emptyList()
+)
+
+// 10. Dedicated OI Flow Regime State Model (Enhanced Version with Debug)
 data class OIFlowRegimeState(
     val regime: String = "BUILDING WINDOW",
     val mechanics: String = "Waiting for sufficient historical data",
@@ -162,7 +196,8 @@ data class OIFlowRegimeState(
     val priceDeltaPercent: Double = 0.0,
     val oiDeltaContracts: Double = 0.0,
     val oiDeltaPercent: Double = 0.0,
-    val buildingWindow: Boolean = true
+    val buildingWindow: Boolean = true,
+    val debugState: OiFlowRegimeDebugState = OiFlowRegimeDebugState()
 )
 
 // The math engine to calculate candle-specific aggression (Dip vs Dump)
