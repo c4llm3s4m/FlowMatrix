@@ -196,10 +196,12 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
 
         val activeCandle = state.liveCandle ?: state.candles.lastOrNull()
 
-        // Filter cards based on AppMode (OI Flow Regime is exclusive to Copilot Mode)
+        // Filter cards based on AppMode (OI Flow Regime & Order Flow Regime are Copilot-only)
         val visibleCards = remember(state.cardOrder, state.appMode) {
             if (state.appMode == AppMode.GEMINI) {
-                state.cardOrder.filter { it != TelemetryCardType.OI_FLOW_REGIME }
+                state.cardOrder.filter {
+                    it != TelemetryCardType.OI_FLOW_REGIME && it != TelemetryCardType.ORDER_FLOW_REGIME
+                }
             } else {
                 state.cardOrder
             }
@@ -301,6 +303,14 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                             onMoveDown = { viewModel.moveCardDown(cardType) },
                             onToggleDebug = { viewModel.toggleOiDebugMode() }
                         )
+                        TelemetryCardType.ORDER_FLOW_REGIME -> OrderFlowRegimeCard(
+                            regimeState = state.orderFlowRegime,
+                            interval = state.interval,
+                            isFirst = isFirst,
+                            isLast = isLast,
+                            onMoveUp = { viewModel.moveCardUp(cardType) },
+                            onMoveDown = { viewModel.moveCardDown(cardType) }
+                        )
                         TelemetryCardType.CVD_CHART -> CvdCard(
                             candles = state.candles,
                             activeCandle = activeCandle,
@@ -376,6 +386,85 @@ fun MetricCard(
             Spacer(modifier = Modifier.height(10.dp))
             content()
         }
+    }
+}
+
+// PHASE 4: Order Flow Regime (Live WS) Card
+@Composable
+fun OrderFlowRegimeCard(
+    regimeState: OrderFlowRegimeState,
+    interval: String,
+    isFirst: Boolean,
+    isLast: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit
+) {
+    MetricCard(
+        title = "Order Flow Regime (Live WS)",
+        isFirst = isFirst,
+        isLast = isLast,
+        onMoveUp = onMoveUp,
+        onMoveDown = onMoveDown
+    ) {
+        // ROW 1: Active Regime Badge
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Active Flow Regime", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Surface(
+                color = regimeState.badgeColor.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(
+                    text = regimeState.regime.uppercase(),
+                    color = regimeState.badgeColor,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+        // ROW 2: Buy Volume
+        DataRow(
+            label = "Buy Volume ($interval)",
+            value = String.format("%,.2f Vol", regimeState.buyVolume),
+            valueColor = GreenPositive
+        )
+
+        // ROW 3: Sell Volume
+        DataRow(
+            label = "Sell Volume ($interval)",
+            value = String.format("%,.2f Vol", regimeState.sellVolume),
+            valueColor = CoralNegative
+        )
+
+        // ROW 4: Net Delta
+        val deltaColor = if (regimeState.netDelta > 0) GreenPositive else if (regimeState.netDelta < 0) CoralNegative else MaterialTheme.colorScheme.onSurface
+        DataRow(
+            label = "Net Delta",
+            value = String.format("%+,.2f Vol", regimeState.netDelta),
+            valueColor = deltaColor
+        )
+
+        // ROW 5: Delta %
+        DataRow(
+            label = "Delta %",
+            value = String.format("%+.2f%%", regimeState.deltaPercent),
+            valueColor = deltaColor
+        )
+
+        // ROW 6: Price Delta %
+        val priceColor = if (regimeState.priceDeltaPercent > 0) GreenPositive else if (regimeState.priceDeltaPercent < 0) CoralNegative else MaterialTheme.colorScheme.onSurface
+        DataRow(
+            label = "Price Delta % ($interval)",
+            value = String.format("%+.2f%%", regimeState.priceDeltaPercent),
+            valueColor = priceColor
+        )
     }
 }
 
@@ -606,7 +695,7 @@ fun OiFlowRegimeCard(
                 DebugRow("Price Score", "+${debug.priceScore}")
                 DebugRow("Total Score / Strength", "${debug.totalScore} [${regimeState.strength}]", regimeState.strengthColor)
 
-                DebugHeader("CVD CONFIRMATION DEBUG")
+                DebugHeader("CVD CONFIRMED / DIVERGENCE DEBUG")
                 DebugRow("Current CVD", String.format("%+,.0f", debug.currentCvd))
                 DebugRow("CVD Direction", debug.cvdDirection)
                 DebugRow("Confirmation Result", regimeState.confirmation ?: "NONE")

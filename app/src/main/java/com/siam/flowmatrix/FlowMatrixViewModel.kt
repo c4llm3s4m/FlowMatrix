@@ -75,6 +75,7 @@ data class DashboardState(
     val positioningMatrix: PositioningMatrix? = null,
     val orderBookImbalance: OrderBookImbalance? = null,
     val oiFlowRegime: OIFlowRegimeState = OIFlowRegimeState(),
+    val orderFlowRegime: OrderFlowRegimeState = OrderFlowRegimeState(),
     val candles: List<CandleOrderFlow> = emptyList(),
     val cardOrder: List<TelemetryCardType> = TelemetryCardType.DEFAULT_ORDER,
     val connectionMode: ConnectionMode = ConnectionMode.AUTO,
@@ -89,6 +90,8 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     private val prefsManager = CardOrderPreferences(application)
 
     private val snapshotBuffer = ArrayDeque<FlowSnapshot>()
+    private val tradeSnapshotBuffer = ArrayDeque<TradeSnapshot>()
+
     private var lastValidRegime: String? = null
     private var lastOiPollTimeMs: Long = 0L
     private var lastPriceTickTimeMs: Long = 0L
@@ -220,9 +223,77 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         }
 
         viewModelScope.launch {
+            wsManager.liveTrade.collect { trade ->
+                if (trade != null) {
+                    processLiveTradeSnapshot(trade)
+                }
+            }
+        }
+
+        viewModelScope.launch {
             wsManager.connectionState.collect { state ->
                 _uiState.update { it.copy(connectionStatus = state.toDisplayString()) }
             }
+        }
+    }
+
+    // --- PHASE 4: ORDER FLOW ENGINE (LIVE WS TRADES) ---
+    private fun processLiveTradeSnapshot(trade: TradeSnapshot) {
+        tradeSnapshotBuffer.addLast(trade)
+
+        val now = trade.timestampMs
+        val windowDurationMs = getTimeframeDurationMs(_uiState.value.interval)
+        val cutoffTime = now - windowDurationMs
+
+        while (tradeSnapshotBuffer.isNotEmpty() && tradeSnapshotBuffer.first().timestampMs < cutoffTime) {
+            tradeSnapshotBuffer.removeFirst()
+        }
+
+        if (tradeSnapshotBuffer.isEmpty()) return
+
+        var buyVol = 0.0
+        var sellVol = 0.0
+
+        for (t in tradeSnapshotBuffer) {
+            if (t.isBuyerMaker) {
+                // Buyer was maker => Seller was taker => Market Sell
+                sellVol += t.quantity
+            } else {
+                // Seller was maker => Buyer was taker => Market Buy
+                buyVol += t.quantity
+            }
+        }
+
+        val totalVol = buyVol + sellVol
+        val netDelta = buyVol - sellVol
+        val deltaPct = if (totalVol > 0.0) (netDelta / totalVol) * 100.0 else 0.0
+
+        val anchorPrice = tradeSnapshotBuffer.first().price
+        val priceDeltaPct = if (anchorPrice > 0.0) ((trade.price - anchorPrice) / anchorPrice) * 100.0 else 0.0
+
+        val isBuilding = tradeSnapshotBuffer.size < 5
+
+        val (regimeStr, colorVal) = when {
+            isBuilding || totalVol == 0.0 -> "BALANCED FLOW" to Color(0xFF9CA3AF)
+            deltaPct >= 12.0 -> "BUY AGGRESSION" to Color(0xFF10B981)
+            deltaPct <= -12.0 -> "SELL AGGRESSION" to Color(0xFFEF4444)
+            else -> "BALANCED FLOW" to Color(0xFF9CA3AF)
+        }
+
+        _uiState.update {
+            it.copy(
+                orderFlowRegime = OrderFlowRegimeState(
+                    regime = regimeStr,
+                    badgeColor = colorVal,
+                    buyVolume = buyVol,
+                    sellVolume = sellVol,
+                    netDelta = netDelta,
+                    deltaPercent = deltaPct,
+                    priceDeltaPercent = priceDeltaPct,
+                    totalVolume = totalVol,
+                    buildingWindow = isBuilding
+                )
+            )
         }
     }
 
@@ -255,6 +326,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
 
     private fun updateCoreState(symbol: String, interval: String) {
         snapshotBuffer.clear()
+        tradeSnapshotBuffer.clear()
         lastValidRegime = null
         lastRegimeTransitionTimeMs = 0L
         val effective = detectEffectiveMode(_uiState.value.connectionMode)
@@ -267,6 +339,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 initialDeltaSign = InitialDeltaSign.WAITING,
                 orderBookImbalance = null,
                 oiFlowRegime = OIFlowRegimeState(debugState = it.oiFlowRegime.debugState.copy(warnings = listOf("WARNING: Window Building"))),
+                orderFlowRegime = OrderFlowRegimeState(),
                 activeMode = effective,
                 error = null
             )

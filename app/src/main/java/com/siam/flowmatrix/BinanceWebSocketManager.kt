@@ -59,6 +59,9 @@ class BinanceWebSocketManager(
     @Volatile
     private var depthWebSocket: WebSocket? = null
 
+    @Volatile
+    private var tradeWebSocket: WebSocket? = null
+
     private var activeSymbol: String = "BTCUSDT"
     private var activeInterval: String = "5m"
     private var activeConnectionMode: ConnectionMode = ConnectionMode.AUTO
@@ -75,6 +78,9 @@ class BinanceWebSocketManager(
 
     private val _liveOrderBookImbalance = MutableStateFlow<OrderBookImbalance?>(null)
     val liveOrderBookImbalance: StateFlow<OrderBookImbalance?> = _liveOrderBookImbalance.asStateFlow()
+
+    private val _liveTrade = MutableStateFlow<TradeSnapshot?>(null)
+    val liveTrade: StateFlow<TradeSnapshot?> = _liveTrade.asStateFlow()
 
     @Volatile
     private var trackedCandleOpenTime = 0L
@@ -102,6 +108,7 @@ class BinanceWebSocketManager(
         lastDepthFrameTimeMs = 0L
         _initialDeltaSign.value = InitialDeltaSign.WAITING
         _liveOrderBookImbalance.value = null
+        _liveTrade.value = null
 
         connectInternal()
     }
@@ -122,6 +129,10 @@ class BinanceWebSocketManager(
         val oldDepthWs = depthWebSocket
         depthWebSocket = null
         oldDepthWs?.cancel()
+
+        val oldTradeWs = tradeWebSocket
+        tradeWebSocket = null
+        oldTradeWs?.cancel()
 
         val lowerSymbol = activeSymbol.lowercase()
 
@@ -283,6 +294,49 @@ class BinanceWebSocketManager(
         })
 
         this.depthWebSocket = currentDepthWs
+
+        // 3. Parallel Aggregate Trades WebSocket Stream (@aggTrade) for Live Order Flow Engine
+        val aggTradeWsUrl = "wss://fstream.binance.com/ws/${lowerSymbol}@aggTrade"
+        val aggTradeRequest = Request.Builder().url(aggTradeWsUrl).build()
+
+        val currentTradeWs = client.newWebSocket(aggTradeRequest, object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                if (this@BinanceWebSocketManager.tradeWebSocket != webSocket) return
+                try {
+                    val json = JSONObject(text)
+                    val price = json.optString("p", "0.0").toDoubleOrNull() ?: 0.0
+                    val qty = json.optString("q", "0.0").toDoubleOrNull() ?: 0.0
+                    val isBuyerMaker = json.optBoolean("m", false)
+                    val tradeTime = json.optLong("T", System.currentTimeMillis())
+
+                    if (price > 0.0 && qty > 0.0) {
+                        _liveTrade.value = TradeSnapshot(
+                            timestampMs = tradeTime,
+                            price = price,
+                            quantity = qty,
+                            isBuyerMaker = isBuyerMaker
+                        )
+                    }
+                } catch (_: Exception) {
+                    // Ignored or logged
+                }
+            }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                if (this@BinanceWebSocketManager.tradeWebSocket != webSocket) return
+                webSocket.close(1000, null)
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                // Handled gracefully
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                // Handled gracefully
+            }
+        })
+
+        this.tradeWebSocket = currentTradeWs
     }
 
     @Synchronized
@@ -325,6 +379,10 @@ class BinanceWebSocketManager(
         val dWs = depthWebSocket
         depthWebSocket = null
         dWs?.cancel()
+
+        val tWs = tradeWebSocket
+        tradeWebSocket = null
+        tWs?.cancel()
 
         _connectionState.value = WebSocketState.Disconnected(null)
     }

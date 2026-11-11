@@ -105,7 +105,7 @@ data class PositioningMatrix(
         }
 }
 
-// 6. Dashboard Telemetry Card Types for Custom Ordering & Persistence (8 Cards Total)
+// 6. Dashboard Telemetry Card Types for Custom Ordering & Persistence (9 Cards Total)
 enum class TelemetryCardType(val id: String, val title: String) {
     INITIAL_PULSE("INITIAL_PULSE", "Initial Candle Volume Delta"),
     ORDER_BOOK_IMBALANCE("ORDER_BOOK_IMBALANCE", "Order Book Imbalance"),
@@ -114,6 +114,7 @@ enum class TelemetryCardType(val id: String, val title: String) {
     LOCAL_AGGRESSION("LOCAL_AGGRESSION", "Local Aggression"),
     OPEN_INTEREST("OPEN_INTEREST", "Open Interest"),
     OI_FLOW_REGIME("OI_FLOW_REGIME", "OI Flow Regime (Live Delta)"),
+    ORDER_FLOW_REGIME("ORDER_FLOW_REGIME", "Order Flow Regime (Live WS)"),
     CVD_CHART("CVD_CHART", "Cumulative Volume Delta");
 
     companion object {
@@ -125,6 +126,7 @@ enum class TelemetryCardType(val id: String, val title: String) {
             LOCAL_AGGRESSION,
             OPEN_INTEREST,
             OI_FLOW_REGIME,
+            ORDER_FLOW_REGIME,
             CVD_CHART
         )
 
@@ -200,7 +202,7 @@ data class OIFlowRegimeState(
     val debugState: OiFlowRegimeDebugState = OiFlowRegimeDebugState()
 )
 
-// 11. Application Mode System (Phase 2: GEMINI vs COPILOT)
+// 11. Application Mode System (Phase 4: GEMINI vs COPILOT)
 enum class AppMode(val id: String, val label: String) {
     GEMINI("GEMINI", "GEMINI MODE"),
     COPILOT("COPILOT", "COPILOT MODE");
@@ -209,6 +211,27 @@ enum class AppMode(val id: String, val label: String) {
         fun fromId(id: String): AppMode = entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: GEMINI
     }
 }
+
+// 12. Trade Snapshot Data Model (Phase 4: Order Flow Engine)
+data class TradeSnapshot(
+    val timestampMs: Long,
+    val price: Double,
+    val quantity: Double,
+    val isBuyerMaker: Boolean
+)
+
+// 13. Order Flow Regime State Model (Live WS Stream Engine)
+data class OrderFlowRegimeState(
+    val regime: String = "BALANCED FLOW",
+    val badgeColor: Color = Color(0xFF9CA3AF),
+    val buyVolume: Double = 0.0,
+    val sellVolume: Double = 0.0,
+    val netDelta: Double = 0.0,
+    val deltaPercent: Double = 0.0,
+    val priceDeltaPercent: Double = 0.0,
+    val totalVolume: Double = 0.0,
+    val buildingWindow: Boolean = true
+)
 
 // The math engine to calculate candle-specific aggression (Dip vs Dump)
 data class CandleOrderFlow(
