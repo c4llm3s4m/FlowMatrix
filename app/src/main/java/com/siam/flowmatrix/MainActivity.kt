@@ -77,7 +77,27 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // --- APP MODE SYSTEM SELECTOR (GEMINI MODE vs COPILOT MODE) ---
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            AppMode.entries.forEach { mode ->
+                FilterChip(
+                    selected = state.appMode == mode,
+                    onClick = { viewModel.setAppMode(mode) },
+                    label = {
+                        val labelText = if (mode == AppMode.GEMINI) "[ GEMINI MODE ]" else "[ COPILOT MODE ]"
+                        Text(labelText, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
+                    }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
 
         // --- SEARCH INPUT & GO BUTTON ---
         Row(
@@ -128,7 +148,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Mode:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Network:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
             ConnectionMode.entries.forEach { mode ->
                 FilterChip(
                     selected = state.connectionMode == mode,
@@ -176,6 +196,15 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
 
         val activeCandle = state.liveCandle ?: state.candles.lastOrNull()
 
+        // Filter cards based on AppMode (OI Flow Regime is exclusive to Copilot Mode)
+        val visibleCards = remember(state.cardOrder, state.appMode) {
+            if (state.appMode == AppMode.GEMINI) {
+                state.cardOrder.filter { it != TelemetryCardType.OI_FLOW_REGIME }
+            } else {
+                state.cardOrder
+            }
+        }
+
         if (state.isLoading && activeCandle == null && state.candles.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -207,13 +236,13 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                     }
                 }
 
-                // DYNAMICALLY RENDERED & REORDERABLE TELEMETRY CARDS (1st through 8th)
+                // DYNAMICALLY RENDERED & REORDERABLE TELEMETRY CARDS
                 itemsIndexed(
-                    items = state.cardOrder,
+                    items = visibleCards,
                     key = { _, cardType -> cardType.id }
                 ) { index, cardType ->
                     val isFirst = index == 0
-                    val isLast = index == state.cardOrder.size - 1
+                    val isLast = index == visibleCards.size - 1
 
                     when (cardType) {
                         TelemetryCardType.INITIAL_PULSE -> InitialPulseCard(
@@ -350,7 +379,7 @@ fun MetricCard(
     }
 }
 
-// ENHANCED: Core 4-Quadrant OI Flow Regime Card with Collapsible Diagnostics / Debug Section
+// ENHANCED: Core 4-Quadrant OI Flow Regime Card (Copilot Mode Feature)
 @Composable
 fun OiFlowRegimeCard(
     regimeState: OIFlowRegimeState,

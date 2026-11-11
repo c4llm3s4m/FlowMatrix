@@ -200,6 +200,16 @@ data class OIFlowRegimeState(
     val debugState: OiFlowRegimeDebugState = OiFlowRegimeDebugState()
 )
 
+// 11. Application Mode System (Phase 2: GEMINI vs COPILOT)
+enum class AppMode(val id: String, val label: String) {
+    GEMINI("GEMINI", "GEMINI MODE"),
+    COPILOT("COPILOT", "COPILOT MODE");
+
+    companion object {
+        fun fromId(id: String): AppMode = entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: GEMINI
+    }
+}
+
 // The math engine to calculate candle-specific aggression (Dip vs Dump)
 data class CandleOrderFlow(
     val openTime: Long,

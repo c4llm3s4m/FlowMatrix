@@ -11,8 +11,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -46,6 +49,15 @@ class CardOrderPreferences(context: Context) {
     fun saveConnectionMode(mode: ConnectionMode) {
         prefs.edit().putString("connection_mode_v1", mode.id).apply()
     }
+
+    fun getAppMode(): AppMode {
+        val savedId = prefs.getString("app_mode_v1", AppMode.GEMINI.id) ?: AppMode.GEMINI.id
+        return AppMode.fromId(savedId)
+    }
+
+    fun saveAppMode(mode: AppMode) {
+        prefs.edit().putString("app_mode_v1", mode.id).apply()
+    }
 }
 
 data class DashboardState(
@@ -67,6 +79,7 @@ data class DashboardState(
     val cardOrder: List<TelemetryCardType> = TelemetryCardType.DEFAULT_ORDER,
     val connectionMode: ConnectionMode = ConnectionMode.AUTO,
     val activeMode: ConnectionMode = ConnectionMode.BROADBAND,
+    val appMode: AppMode = AppMode.GEMINI,
     val error: String? = null
 )
 
@@ -87,15 +100,21 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     private val _uiState = MutableStateFlow(
         DashboardState(
             cardOrder = prefsManager.getCardOrder(),
-            connectionMode = prefsManager.getConnectionMode()
+            connectionMode = prefsManager.getConnectionMode(),
+            appMode = prefsManager.getAppMode()
         )
     )
     val uiState: StateFlow<DashboardState> = _uiState.asStateFlow()
 
+    val appModeState: StateFlow<AppMode> = _uiState
+        .map { it.appMode }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, _uiState.value.appMode)
+
     init {
         val savedMode = prefsManager.getConnectionMode()
+        val savedAppMode = prefsManager.getAppMode()
         val effective = detectEffectiveMode(savedMode)
-        _uiState.update { it.copy(connectionMode = savedMode, activeMode = effective) }
+        _uiState.update { it.copy(connectionMode = savedMode, activeMode = effective, appMode = savedAppMode) }
 
         startPolling()
         listenToWebSocket()
@@ -124,6 +143,11 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         "15m" -> 900_000L
         "1h" -> 3_600_000L
         else -> 300_000L
+    }
+
+    fun setAppMode(mode: AppMode) {
+        prefsManager.saveAppMode(mode)
+        _uiState.update { it.copy(appMode = mode) }
     }
 
     fun setConnectionMode(mode: ConnectionMode) {
