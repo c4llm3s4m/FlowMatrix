@@ -20,6 +20,7 @@ import org.json.JSONObject
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.min
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
@@ -82,6 +83,10 @@ class BinanceWebSocketManager(
     private val _liveTrade = MutableStateFlow<TradeSnapshot?>(null)
     val liveTrade: StateFlow<TradeSnapshot?> = _liveTrade.asStateFlow()
 
+    private val aggTradeMsgCount = AtomicLong(0L)
+    val tradeMsgCount: Long get() = aggTradeMsgCount.get()
+    val reconnectCount: Int get() = reconnectAttempt
+
     @Volatile
     private var trackedCandleOpenTime = 0L
 
@@ -106,6 +111,7 @@ class BinanceWebSocketManager(
         reconnectAttempt = 0
         trackedCandleOpenTime = 0L
         lastDepthFrameTimeMs = 0L
+        aggTradeMsgCount.set(0L)
         _initialDeltaSign.value = InitialDeltaSign.WAITING
         _liveOrderBookImbalance.value = null
         _liveTrade.value = null
@@ -303,6 +309,7 @@ class BinanceWebSocketManager(
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (this@BinanceWebSocketManager.tradeWebSocket != webSocket) return
                 try {
+                    aggTradeMsgCount.incrementAndGet()
                     val json = JSONObject(text)
                     val price = json.optString("p", "0.0").toDoubleOrNull() ?: 0.0
                     val qty = json.optString("q", "0.0").toDoubleOrNull() ?: 0.0

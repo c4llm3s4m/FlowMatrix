@@ -309,7 +309,8 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                             isFirst = isFirst,
                             isLast = isLast,
                             onMoveUp = { viewModel.moveCardUp(cardType) },
-                            onMoveDown = { viewModel.moveCardDown(cardType) }
+                            onMoveDown = { viewModel.moveCardDown(cardType) },
+                            onToggleDebug = { viewModel.toggleOrderFlowDebugMode() }
                         )
                         TelemetryCardType.CVD_CHART -> CvdCard(
                             candles = state.candles,
@@ -389,7 +390,7 @@ fun MetricCard(
     }
 }
 
-// PHASE 4: Order Flow Regime (Live WS) Card
+// PHASE 4 & 4.5: Order Flow Regime (Live WS) Card with Diagnostics Mode
 @Composable
 fun OrderFlowRegimeCard(
     regimeState: OrderFlowRegimeState,
@@ -397,14 +398,32 @@ fun OrderFlowRegimeCard(
     isFirst: Boolean,
     isLast: Boolean,
     onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit
+    onMoveDown: () -> Unit,
+    onToggleDebug: () -> Unit
 ) {
+    val debug = regimeState.debugState
+
     MetricCard(
         title = "Order Flow Regime (Live WS)",
         isFirst = isFirst,
         isLast = isLast,
         onMoveUp = onMoveUp,
-        onMoveDown = onMoveDown
+        onMoveDown = onMoveDown,
+        headerExtra = {
+            Surface(
+                onClick = onToggleDebug,
+                color = if (debug.isDebugEnabled) MaterialTheme.colorScheme.primaryContainer else Color.Gray.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text(
+                    text = "[DEBUG]",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (debug.isDebugEnabled) MaterialTheme.colorScheme.onPrimaryContainer else Color.Gray,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+        }
     ) {
         // ROW 1: Active Regime Badge
         Row(
@@ -465,6 +484,60 @@ fun OrderFlowRegimeCard(
             value = String.format("%+.2f%%", regimeState.priceDeltaPercent),
             valueColor = priceColor
         )
+
+        // --- PHASE 4.5: COLLAPSIBLE DIAGNOSTICS SECTION ---
+        if (debug.isDebugEnabled) {
+            Spacer(modifier = Modifier.height(8.dp))
+            HorizontalDivider(color = GoldNeutral.copy(alpha = 0.4f))
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("🛠 DIAGNOSTICS / DEBUG MODE", fontSize = 11.sp, fontWeight = FontWeight.Black, color = GoldNeutral)
+
+                // VALIDATION WARNING BANNERS
+                debug.warnings.forEach { warning ->
+                    Surface(
+                        color = GoldNeutral.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = warning,
+                            color = GoldNeutral,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+
+                DebugHeader("WS STATUS")
+                val wsColor = if (debug.wsStatus == "CONNECTED") GreenPositive else if (debug.wsStatus == "CONNECTING") GoldNeutral else CoralNegative
+                DebugRow("Stream Status", debug.wsStatus, wsColor)
+
+                DebugHeader("STREAM HEALTH")
+                DebugRow("Messages Received", "${debug.messagesReceived}")
+                DebugRow("Messages Per Second", String.format("%.1f msg/s", debug.messagesPerSecond))
+                DebugRow("Last Trade Timestamp", debug.lastTradeTimestampFormatted)
+                DebugRow("Reconnect Count", "${debug.reconnectCount}")
+
+                DebugHeader("TRADE BUFFER")
+                DebugRow("Buffered Trades", "${debug.bufferedTradesCount}")
+                DebugRow("Current Timeframe", debug.currentTimeframe)
+                DebugRow("Window Status", debug.windowStatus, if (debug.windowStatus == "READY") GreenPositive else Color.Gray)
+
+                DebugHeader("LAST TRADE")
+                DebugRow("Price", String.format("$%.5f", debug.lastPrice))
+                DebugRow("Quantity", String.format("%.4f Vol", debug.lastQuantity))
+                DebugRow("isBuyerMaker (Sell=True)", if (debug.lastIsBuyerMaker) "TRUE (Market Sell)" else "FALSE (Market Buy)", if (debug.lastIsBuyerMaker) CoralNegative else GreenPositive)
+
+                DebugHeader("FLOW VALUES")
+                DebugRow("Buy Volume", String.format("%,.2f Vol", debug.buyVolume), GreenPositive)
+                DebugRow("Sell Volume", String.format("%,.2f Vol", debug.sellVolume), CoralNegative)
+                DebugRow("Net Delta", String.format("%+,.2f Vol", debug.netDelta), deltaColor)
+                DebugRow("Delta %", String.format("%+.2f%%", debug.deltaPercent), deltaColor)
+            }
+        }
     }
 }
 

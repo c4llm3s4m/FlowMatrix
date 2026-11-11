@@ -202,7 +202,7 @@ data class OIFlowRegimeState(
     val debugState: OiFlowRegimeDebugState = OiFlowRegimeDebugState()
 )
 
-// 11. Application Mode System (Phase 4: GEMINI vs COPILOT)
+// 11. Application Mode System (Phase 4.5: GEMINI vs COPILOT)
 enum class AppMode(val id: String, val label: String) {
     GEMINI("GEMINI", "GEMINI MODE"),
     COPILOT("COPILOT", "COPILOT MODE");
@@ -220,7 +220,29 @@ data class TradeSnapshot(
     val isBuyerMaker: Boolean
 )
 
-// 13. Order Flow Regime State Model (Live WS Stream Engine)
+// 13. Order Flow Regime Diagnostics / Debug State Model (Phase 4.5)
+data class OrderFlowRegimeDebugState(
+    val isDebugEnabled: Boolean = false,
+    val wsStatus: String = "CONNECTING",
+    val messagesReceived: Long = 0L,
+    val messagesPerSecond: Double = 0.0,
+    val lastTradeTimestampFormatted: String = "--:--:--.---",
+    val msSinceLastTrade: Long = 0L,
+    val reconnectCount: Int = 0,
+    val bufferedTradesCount: Int = 0,
+    val currentTimeframe: String = "5m",
+    val windowStatus: String = "BUILDING",
+    val lastPrice: Double = 0.0,
+    val lastQuantity: Double = 0.0,
+    val lastIsBuyerMaker: Boolean = false,
+    val buyVolume: Double = 0.0,
+    val sellVolume: Double = 0.0,
+    val netDelta: Double = 0.0,
+    val deltaPercent: Double = 0.0,
+    val warnings: List<String> = emptyList()
+)
+
+// 14. Order Flow Regime State Model (Live WS Stream Engine with Debug State)
 data class OrderFlowRegimeState(
     val regime: String = "BALANCED FLOW",
     val badgeColor: Color = Color(0xFF9CA3AF),
@@ -230,7 +252,8 @@ data class OrderFlowRegimeState(
     val deltaPercent: Double = 0.0,
     val priceDeltaPercent: Double = 0.0,
     val totalVolume: Double = 0.0,
-    val buildingWindow: Boolean = true
+    val buildingWindow: Boolean = true,
+    val debugState: OrderFlowRegimeDebugState = OrderFlowRegimeDebugState()
 )
 
 // The math engine to calculate candle-specific aggression (Dip vs Dump)

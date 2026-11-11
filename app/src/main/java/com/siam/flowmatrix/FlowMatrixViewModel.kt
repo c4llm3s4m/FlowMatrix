@@ -91,10 +91,12 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
 
     private val snapshotBuffer = ArrayDeque<FlowSnapshot>()
     private val tradeSnapshotBuffer = ArrayDeque<TradeSnapshot>()
+    private val tradeRateWindow = ArrayDeque<Long>()
 
     private var lastValidRegime: String? = null
     private var lastOiPollTimeMs: Long = 0L
     private var lastPriceTickTimeMs: Long = 0L
+    private var lastTradeTimeMs: Long = 0L
     private var lastRegimeTransitionTimeMs: Long = 0L
 
     private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.US)
@@ -168,6 +170,14 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    fun toggleOrderFlowDebugMode() {
+        _uiState.update {
+            val currentDebug = it.orderFlowRegime.debugState
+            val toggled = currentDebug.copy(isDebugEnabled = !currentDebug.isDebugEnabled)
+            it.copy(orderFlowRegime = it.orderFlowRegime.copy(debugState = toggled))
+        }
+    }
+
     fun moveCardUp(card: TelemetryCardType) {
         val current = _uiState.value.cardOrder.toMutableList()
         val index = current.indexOf(card)
@@ -237,11 +247,21 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    // --- PHASE 4: ORDER FLOW ENGINE (LIVE WS TRADES) ---
+    // --- PHASE 4 & 4.5: ORDER FLOW ENGINE (LIVE WS TRADES & DIAGNOSTICS) ---
     private fun processLiveTradeSnapshot(trade: TradeSnapshot) {
         tradeSnapshotBuffer.addLast(trade)
 
-        val now = trade.timestampMs
+        val now = System.currentTimeMillis()
+        lastTradeTimeMs = now
+
+        // Calculate sliding window trade rate (msgs/sec)
+        tradeRateWindow.addLast(now)
+        val rateCutoff = now - 1000L
+        while (tradeRateWindow.isNotEmpty() && tradeRateWindow.first() < rateCutoff) {
+            tradeRateWindow.removeFirst()
+        }
+        val msgsPerSec = tradeRateWindow.size.toDouble()
+
         val windowDurationMs = getTimeframeDurationMs(_uiState.value.interval)
         val cutoffTime = now - windowDurationMs
 
@@ -280,6 +300,44 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
             else -> "BALANCED FLOW" to Color(0xFF9CA3AF)
         }
 
+        // --- PHASE 4.5 DIAGNOSTICS CALCULATIONS ---
+        val wsState = wsManager.connectionState.value
+        val wsStatusStr = when (wsState) {
+            is WebSocketState.Connected -> "CONNECTED"
+            is WebSocketState.Connecting -> "CONNECTING"
+            else -> "DISCONNECTED"
+        }
+
+        val msgCount = wsManager.tradeMsgCount
+        val warnings = mutableListOf<String>()
+        if (msgCount == 0L) warnings.add("WARNING: No WebSocket trade messages received")
+        if (tradeSnapshotBuffer.isEmpty()) warnings.add("WARNING: No trades buffered")
+        if (totalVol == 0.0) warnings.add("WARNING: Buy and sell volume zero")
+        if (lastTradeTimeMs > 0 && (now - lastTradeTimeMs > 10_000L)) warnings.add("WARNING: Trade stream stalled")
+
+        val isDebugActive = _uiState.value.orderFlowRegime.debugState.isDebugEnabled
+
+        val debugState = OrderFlowRegimeDebugState(
+            isDebugEnabled = isDebugActive,
+            wsStatus = wsStatusStr,
+            messagesReceived = msgCount,
+            messagesPerSecond = msgsPerSec,
+            lastTradeTimestampFormatted = millisFormatter.format(Date(trade.timestampMs)),
+            msSinceLastTrade = if (lastTradeTimeMs > 0) now - lastTradeTimeMs else 0L,
+            reconnectCount = wsManager.reconnectCount,
+            bufferedTradesCount = tradeSnapshotBuffer.size,
+            currentTimeframe = _uiState.value.interval,
+            windowStatus = if (isBuilding) "BUILDING" else "READY",
+            lastPrice = trade.price,
+            lastQuantity = trade.quantity,
+            lastIsBuyerMaker = trade.isBuyerMaker,
+            buyVolume = buyVol,
+            sellVolume = sellVol,
+            netDelta = netDelta,
+            deltaPercent = deltaPct,
+            warnings = warnings
+        )
+
         _uiState.update {
             it.copy(
                 orderFlowRegime = OrderFlowRegimeState(
@@ -291,7 +349,8 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                     deltaPercent = deltaPct,
                     priceDeltaPercent = priceDeltaPct,
                     totalVolume = totalVol,
-                    buildingWindow = isBuilding
+                    buildingWindow = isBuilding,
+                    debugState = debugState
                 )
             )
         }
@@ -327,6 +386,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     private fun updateCoreState(symbol: String, interval: String) {
         snapshotBuffer.clear()
         tradeSnapshotBuffer.clear()
+        tradeRateWindow.clear()
         lastValidRegime = null
         lastRegimeTransitionTimeMs = 0L
         val effective = detectEffectiveMode(_uiState.value.connectionMode)
