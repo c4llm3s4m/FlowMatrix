@@ -220,16 +220,36 @@ data class TradeSnapshot(
     val isBuyerMaker: Boolean
 )
 
-// 13. Order Flow Regime Diagnostics / Debug State Model (Phase 4.5)
+// WebSocket Connection State Machine Stages
+enum class WsConnectionStage {
+    SOCKET_CREATING,
+    SOCKET_OPEN,
+    SUBSCRIBING,
+    SUBSCRIBED,
+    RECEIVING_MESSAGES,
+    ERROR,
+    DISCONNECTED
+}
+
+// 13. Order Flow Regime Diagnostics / Debug State Model (Full Diagnostics Pipeline)
 data class OrderFlowRegimeDebugState(
     val isDebugEnabled: Boolean = false,
-    val wsStatus: String = "CONNECTING",
+    val connectionStage: WsConnectionStage = WsConnectionStage.DISCONNECTED,
+    val socketUrl: String = "wss://fstream.binance.com/ws/btcusdt@trade",
+    val currentStream: String = "btcusdt@trade",
+    val currentSymbol: String = "BTCUSDT",
+    val previousSymbol: String? = null,
+    val lastSubscriptionTimeFormatted: String = "--:--:--",
+    val lastError: String? = null,
     val messagesReceived: Long = 0L,
     val messagesPerSecond: Double = 0.0,
-    val lastTradeTimestampFormatted: String = "--:--:--.---",
-    val msSinceLastTrade: Long = 0L,
+    val lastMessageTimestampFormatted: String = "--:--:--.---",
+    val msSinceLastMessage: Long = 0L,
+    val rawMessagePreview: String = "No messages received",
     val reconnectCount: Int = 0,
     val bufferedTradesCount: Int = 0,
+    val latestSnapshotTimestampFormatted: String = "--:--:--.---",
+    val latestSnapshotPrice: Double = 0.0,
     val currentTimeframe: String = "5m",
     val windowStatus: String = "BUILDING",
     val lastPrice: Double = 0.0,
@@ -239,6 +259,7 @@ data class OrderFlowRegimeDebugState(
     val sellVolume: Double = 0.0,
     val netDelta: Double = 0.0,
     val deltaPercent: Double = 0.0,
+    val parseFailuresCount: Long = 0L,
     val warnings: List<String> = emptyList()
 )
 

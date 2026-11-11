@@ -67,6 +67,9 @@ class BinanceWebSocketManager(
     private var activeInterval: String = "5m"
     private var activeConnectionMode: ConnectionMode = ConnectionMode.AUTO
 
+    private var previousSymbolName: String? = null
+    private var lastSubscriptionTimeMsVal: Long = 0L
+
     @Volatile
     private var reconnectAttempt = 0
     private val isManuallyDisconnected = AtomicBoolean(false)
@@ -83,9 +86,31 @@ class BinanceWebSocketManager(
     private val _liveTrade = MutableStateFlow<TradeSnapshot?>(null)
     val liveTrade: StateFlow<TradeSnapshot?> = _liveTrade.asStateFlow()
 
+    private val _tradeStreamStage = MutableStateFlow<WsConnectionStage>(WsConnectionStage.DISCONNECTED)
+    val tradeStreamStage: StateFlow<WsConnectionStage> = _tradeStreamStage.asStateFlow()
+
+    private val _tradeSocketUrl = MutableStateFlow<String>("")
+    val tradeSocketUrl: StateFlow<String> = _tradeSocketUrl.asStateFlow()
+
+    private val _tradeStreamName = MutableStateFlow<String>("")
+    val tradeStreamName: StateFlow<String> = _tradeStreamName.asStateFlow()
+
+    private val _tradeLastError = MutableStateFlow<String?>(null)
+    val tradeLastError: StateFlow<String?> = _tradeLastError.asStateFlow()
+
+    private val _rawLastMessage = MutableStateFlow<String>("No messages received")
+    val rawLastMessage: StateFlow<String> = _rawLastMessage.asStateFlow()
+
     private val aggTradeMsgCount = AtomicLong(0L)
     val tradeMsgCount: Long get() = aggTradeMsgCount.get()
+
+    private val tradeParseFailures = AtomicLong(0L)
+    val parseFailuresCount: Long get() = tradeParseFailures.get()
+
     val reconnectCount: Int get() = reconnectAttempt
+    val prevSymbol: String? get() = previousSymbolName
+    val currSymbol: String get() = activeSymbol
+    val lastSubTimeMs: Long get() = lastSubscriptionTimeMsVal
 
     @Volatile
     private var trackedCandleOpenTime = 0L
@@ -100,18 +125,28 @@ class BinanceWebSocketManager(
         val trimmed = symbol.trim().uppercase()
         if (trimmed.isBlank()) return
 
-        activeSymbol = if (!trimmed.endsWith("USDT") && !trimmed.endsWith("BUSD")) {
+        val formattedSymbol = if (!trimmed.endsWith("USDT") && !trimmed.endsWith("BUSD")) {
             "${trimmed}USDT"
         } else {
             trimmed
         }
+
+        if (activeSymbol != formattedSymbol && activeSymbol.isNotBlank()) {
+            previousSymbolName = activeSymbol
+        }
+
+        activeSymbol = formattedSymbol
         activeInterval = interval
         activeConnectionMode = mode
+        lastSubscriptionTimeMsVal = System.currentTimeMillis()
         isManuallyDisconnected.set(false)
         reconnectAttempt = 0
         trackedCandleOpenTime = 0L
         lastDepthFrameTimeMs = 0L
         aggTradeMsgCount.set(0L)
+        tradeParseFailures.set(0L)
+        _tradeLastError.value = null
+        _rawLastMessage.value = "No messages received"
         _initialDeltaSign.value = InitialDeltaSign.WAITING
         _liveOrderBookImbalance.value = null
         _liveTrade.value = null
@@ -301,15 +336,30 @@ class BinanceWebSocketManager(
 
         this.depthWebSocket = currentDepthWs
 
-        // 3. Parallel Aggregate Trades WebSocket Stream (@aggTrade) for Live Order Flow Engine
-        val aggTradeWsUrl = "wss://fstream.binance.com/ws/${lowerSymbol}@aggTrade"
+        // 3. Parallel Trades WebSocket Stream (@trade) for Live Order Flow Engine
+        val tradeStreamNameStr = "${lowerSymbol}@trade"
+        val aggTradeWsUrl = "wss://fstream.binance.com/ws/$tradeStreamNameStr"
+
+        _tradeSocketUrl.value = aggTradeWsUrl
+        _tradeStreamName.value = tradeStreamNameStr
+        _tradeStreamStage.value = WsConnectionStage.SOCKET_CREATING
+
         val aggTradeRequest = Request.Builder().url(aggTradeWsUrl).build()
 
         val currentTradeWs = client.newWebSocket(aggTradeRequest, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (this@BinanceWebSocketManager.tradeWebSocket != webSocket) return
+                _tradeStreamStage.value = WsConnectionStage.SOCKET_OPEN
+                _tradeStreamStage.value = WsConnectionStage.SUBSCRIBED
+            }
+
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (this@BinanceWebSocketManager.tradeWebSocket != webSocket) return
                 try {
+                    _tradeStreamStage.value = WsConnectionStage.RECEIVING_MESSAGES
+                    _rawLastMessage.value = if (text.length > 180) text.substring(0, 180) + "..." else text
                     aggTradeMsgCount.incrementAndGet()
+
                     val json = JSONObject(text)
                     val price = json.optString("p", "0.0").toDoubleOrNull() ?: 0.0
                     val qty = json.optString("q", "0.0").toDoubleOrNull() ?: 0.0
@@ -323,23 +373,30 @@ class BinanceWebSocketManager(
                             quantity = qty,
                             isBuyerMaker = isBuyerMaker
                         )
+                    } else {
+                        tradeParseFailures.incrementAndGet()
                     }
-                } catch (_: Exception) {
-                    // Ignored or logged
+                } catch (e: Exception) {
+                    tradeParseFailures.incrementAndGet()
+                    _tradeLastError.value = e.message ?: "JSON parse error"
                 }
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 if (this@BinanceWebSocketManager.tradeWebSocket != webSocket) return
+                _tradeStreamStage.value = WsConnectionStage.DISCONNECTED
                 webSocket.close(1000, null)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                // Handled gracefully
+                if (this@BinanceWebSocketManager.tradeWebSocket != webSocket) return
+                _tradeStreamStage.value = WsConnectionStage.DISCONNECTED
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                // Handled gracefully
+                if (this@BinanceWebSocketManager.tradeWebSocket != webSocket) return
+                _tradeStreamStage.value = WsConnectionStage.ERROR
+                _tradeLastError.value = t.message ?: "Connection failure"
             }
         })
 
@@ -392,6 +449,7 @@ class BinanceWebSocketManager(
         tWs?.cancel()
 
         _connectionState.value = WebSocketState.Disconnected(null)
+        _tradeStreamStage.value = WsConnectionStage.DISCONNECTED
     }
 
     /**

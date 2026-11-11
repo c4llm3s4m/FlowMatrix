@@ -300,32 +300,49 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
             else -> "BALANCED FLOW" to Color(0xFF9CA3AF)
         }
 
-        // --- PHASE 4.5 DIAGNOSTICS CALCULATIONS ---
-        val wsState = wsManager.connectionState.value
-        val wsStatusStr = when (wsState) {
-            is WebSocketState.Connected -> "CONNECTED"
-            is WebSocketState.Connecting -> "CONNECTING"
-            else -> "DISCONNECTED"
-        }
-
+        // --- PHASE 4.5 DETAILED WS DIAGNOSTICS ENGINE ---
+        val wsStage = wsManager.tradeStreamStage.value
+        val socketUrl = wsManager.tradeSocketUrl.value
+        val currentStream = wsManager.tradeStreamName.value
+        val currentSymbol = wsManager.currSymbol
+        val prevSymbol = wsManager.prevSymbol
+        val lastSubTime = wsManager.lastSubTimeMs
+        val lastError = wsManager.tradeLastError.value
         val msgCount = wsManager.tradeMsgCount
+        val rawPreview = wsManager.rawLastMessage.value
+        val parseFailures = wsManager.parseFailuresCount
+
+        val latestSnapshotTimeFormatted = if (tradeSnapshotBuffer.isNotEmpty()) millisFormatter.format(Date(tradeSnapshotBuffer.last().timestampMs)) else "--:--:--.---"
+        val latestSnapshotPrice = tradeSnapshotBuffer.lastOrNull()?.price ?: 0.0
+
         val warnings = mutableListOf<String>()
-        if (msgCount == 0L) warnings.add("WARNING: No WebSocket trade messages received")
-        if (tradeSnapshotBuffer.isEmpty()) warnings.add("WARNING: No trades buffered")
-        if (totalVol == 0.0) warnings.add("WARNING: Buy and sell volume zero")
-        if (lastTradeTimeMs > 0 && (now - lastTradeTimeMs > 10_000L)) warnings.add("WARNING: Trade stream stalled")
+        if (msgCount == 0L) warnings.add("WARNING: No WS Messages")
+        if (wsStage != WsConnectionStage.SUBSCRIBED && wsStage != WsConnectionStage.RECEIVING_MESSAGES) warnings.add("WARNING: Subscription Not Active")
+        if (msgCount > 0L && tradeSnapshotBuffer.isEmpty()) warnings.add("WARNING: No Buffered Trades")
+        if (parseFailures > 0L) warnings.add("WARNING: Parse Failure ($parseFailures failed)")
+        if (currentSymbol.isBlank()) warnings.add("WARNING: Symbol Missing")
+        if (lastTradeTimeMs > 0 && (now - lastTradeTimeMs > 10_000L)) warnings.add("WARNING: Trade Stream Stalled")
 
         val isDebugActive = _uiState.value.orderFlowRegime.debugState.isDebugEnabled
 
         val debugState = OrderFlowRegimeDebugState(
             isDebugEnabled = isDebugActive,
-            wsStatus = wsStatusStr,
+            connectionStage = wsStage,
+            socketUrl = socketUrl,
+            currentStream = currentStream,
+            currentSymbol = currentSymbol,
+            previousSymbol = prevSymbol,
+            lastSubscriptionTimeFormatted = if (lastSubTime > 0) timeFormatter.format(Date(lastSubTime)) else "--:--:--",
+            lastError = lastError,
             messagesReceived = msgCount,
             messagesPerSecond = msgsPerSec,
-            lastTradeTimestampFormatted = millisFormatter.format(Date(trade.timestampMs)),
-            msSinceLastTrade = if (lastTradeTimeMs > 0) now - lastTradeTimeMs else 0L,
+            lastMessageTimestampFormatted = millisFormatter.format(Date(trade.timestampMs)),
+            msSinceLastMessage = if (lastTradeTimeMs > 0) now - lastTradeTimeMs else 0L,
+            rawMessagePreview = rawPreview,
             reconnectCount = wsManager.reconnectCount,
             bufferedTradesCount = tradeSnapshotBuffer.size,
+            latestSnapshotTimestampFormatted = latestSnapshotTimeFormatted,
+            latestSnapshotPrice = latestSnapshotPrice,
             currentTimeframe = _uiState.value.interval,
             windowStatus = if (isBuilding) "BUILDING" else "READY",
             lastPrice = trade.price,
@@ -335,6 +352,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
             sellVolume = sellVol,
             netDelta = netDelta,
             deltaPercent = deltaPct,
+            parseFailuresCount = parseFailures,
             warnings = warnings
         )
 

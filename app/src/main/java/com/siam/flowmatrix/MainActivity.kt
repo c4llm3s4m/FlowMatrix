@@ -390,7 +390,7 @@ fun MetricCard(
     }
 }
 
-// PHASE 4 & 4.5: Order Flow Regime (Live WS) Card with Diagnostics Mode
+// PHASE 4 & 4.5: Order Flow Regime (Live WS) Card with Full Diagnostics Pipeline
 @Composable
 fun OrderFlowRegimeCard(
     regimeState: OrderFlowRegimeState,
@@ -485,14 +485,14 @@ fun OrderFlowRegimeCard(
             valueColor = priceColor
         )
 
-        // --- PHASE 4.5: COLLAPSIBLE DIAGNOSTICS SECTION ---
+        // --- STEP 9: FULL DIAGNOSTICS & DEBUG SECTION ---
         if (debug.isDebugEnabled) {
             Spacer(modifier = Modifier.height(8.dp))
             HorizontalDivider(color = GoldNeutral.copy(alpha = 0.4f))
             Spacer(modifier = Modifier.height(8.dp))
 
             Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("🛠 DIAGNOSTICS / DEBUG MODE", fontSize = 11.sp, fontWeight = FontWeight.Black, color = GoldNeutral)
+                Text("🛠 ORDER FLOW DIAGNOSTICS / DEBUG", fontSize = 11.sp, fontWeight = FontWeight.Black, color = GoldNeutral)
 
                 // VALIDATION WARNING BANNERS
                 debug.warnings.forEach { warning ->
@@ -512,30 +512,44 @@ fun OrderFlowRegimeCard(
                 }
 
                 DebugHeader("WS STATUS")
-                val wsColor = if (debug.wsStatus == "CONNECTED") GreenPositive else if (debug.wsStatus == "CONNECTING") GoldNeutral else CoralNegative
-                DebugRow("Stream Status", debug.wsStatus, wsColor)
+                val stageColor = when (debug.connectionStage) {
+                    WsConnectionStage.RECEIVING_MESSAGES -> GreenPositive
+                    WsConnectionStage.SUBSCRIBED, WsConnectionStage.SOCKET_OPEN -> GoldNeutral
+                    else -> CoralNegative
+                }
+                DebugRow("Connection Stage", debug.connectionStage.name, stageColor)
+                DebugRow("Socket URL", debug.socketUrl)
+                DebugRow("Current Stream", debug.currentStream)
+                DebugRow("Current Symbol", debug.currentSymbol)
+                if (debug.lastError != null) {
+                    DebugRow("Last Error", debug.lastError, CoralNegative)
+                }
 
                 DebugHeader("STREAM HEALTH")
                 DebugRow("Messages Received", "${debug.messagesReceived}")
-                DebugRow("Messages Per Second", String.format("%.1f msg/s", debug.messagesPerSecond))
-                DebugRow("Last Trade Timestamp", debug.lastTradeTimestampFormatted)
+                DebugRow("Messages/sec", String.format("%.1f msg/s", debug.messagesPerSecond))
                 DebugRow("Reconnect Count", "${debug.reconnectCount}")
+                DebugRow("Last Message Time", debug.lastMessageTimestampFormatted)
+
+                DebugHeader("LAST MESSAGE")
+                DebugRow("Raw Preview", debug.rawMessagePreview)
+
+                DebugHeader("PARSED TRADE")
+                DebugRow("Price", String.format("$%.5f", debug.lastPrice))
+                DebugRow("Quantity", String.format("%.4f Vol", debug.lastQuantity))
+                DebugRow("Timestamp", debug.lastMessageTimestampFormatted)
+                DebugRow("isBuyerMaker", if (debug.lastIsBuyerMaker) "TRUE (Market Sell)" else "FALSE (Market Buy)", if (debug.lastIsBuyerMaker) CoralNegative else GreenPositive)
 
                 DebugHeader("TRADE BUFFER")
                 DebugRow("Buffered Trades", "${debug.bufferedTradesCount}")
-                DebugRow("Current Timeframe", debug.currentTimeframe)
+                DebugRow("Latest Snapshot Time", debug.latestSnapshotTimestampFormatted)
+                DebugRow("Latest Snapshot Price", String.format("$%.5f", debug.latestSnapshotPrice))
                 DebugRow("Window Status", debug.windowStatus, if (debug.windowStatus == "READY") GreenPositive else Color.Gray)
 
-                DebugHeader("LAST TRADE")
-                DebugRow("Price", String.format("$%.5f", debug.lastPrice))
-                DebugRow("Quantity", String.format("%.4f Vol", debug.lastQuantity))
-                DebugRow("isBuyerMaker (Sell=True)", if (debug.lastIsBuyerMaker) "TRUE (Market Sell)" else "FALSE (Market Buy)", if (debug.lastIsBuyerMaker) CoralNegative else GreenPositive)
-
-                DebugHeader("FLOW VALUES")
-                DebugRow("Buy Volume", String.format("%,.2f Vol", debug.buyVolume), GreenPositive)
-                DebugRow("Sell Volume", String.format("%,.2f Vol", debug.sellVolume), CoralNegative)
-                DebugRow("Net Delta", String.format("%+,.2f Vol", debug.netDelta), deltaColor)
-                DebugRow("Delta %", String.format("%+.2f%%", debug.deltaPercent), deltaColor)
+                DebugHeader("SYMBOL SWITCHING")
+                DebugRow("Previous Symbol", debug.previousSymbol ?: "NONE")
+                DebugRow("Current Symbol", debug.currentSymbol)
+                DebugRow("Last Subscription Time", debug.lastSubscriptionTimeFormatted)
             }
         }
     }
