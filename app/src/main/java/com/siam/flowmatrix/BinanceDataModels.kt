@@ -105,7 +105,7 @@ data class PositioningMatrix(
         }
 }
 
-// 6. Dashboard Telemetry Card Types for Custom Ordering & Persistence (9 Cards Total)
+// 6. Dashboard Telemetry Card Types for Custom Ordering & Persistence (10 Cards Total)
 enum class TelemetryCardType(val id: String, val title: String) {
     INITIAL_PULSE("INITIAL_PULSE", "Initial Candle Volume Delta"),
     ORDER_BOOK_IMBALANCE("ORDER_BOOK_IMBALANCE", "Order Book Imbalance"),
@@ -115,6 +115,7 @@ enum class TelemetryCardType(val id: String, val title: String) {
     OPEN_INTEREST("OPEN_INTEREST", "Open Interest"),
     OI_FLOW_REGIME("OI_FLOW_REGIME", "OI Flow Regime (Live Delta)"),
     ORDER_FLOW_REGIME("ORDER_FLOW_REGIME", "Order Flow Regime (Live WS)"),
+    FLOW_CONSENSUS("FLOW_CONSENSUS", "Flow Consensus Engine"),
     CVD_CHART("CVD_CHART", "Cumulative Volume Delta");
 
     companion object {
@@ -127,6 +128,7 @@ enum class TelemetryCardType(val id: String, val title: String) {
             OPEN_INTEREST,
             OI_FLOW_REGIME,
             ORDER_FLOW_REGIME,
+            FLOW_CONSENSUS,
             CVD_CHART
         )
 
@@ -202,7 +204,7 @@ data class OIFlowRegimeState(
     val debugState: OiFlowRegimeDebugState = OiFlowRegimeDebugState()
 )
 
-// 11. Application Mode System (Phase 4.5: GEMINI vs COPILOT)
+// 11. Application Mode System (Phase 5: GEMINI vs COPILOT)
 enum class AppMode(val id: String, val label: String) {
     GEMINI("GEMINI", "GEMINI MODE"),
     COPILOT("COPILOT", "COPILOT MODE");
@@ -275,6 +277,30 @@ data class OrderFlowRegimeState(
     val totalVolume: Double = 0.0,
     val buildingWindow: Boolean = true,
     val debugState: OrderFlowRegimeDebugState = OrderFlowRegimeDebugState()
+)
+
+// 15. Flow Consensus Diagnostics / Debug State Model (Phase 5)
+data class FlowConsensusDebugState(
+    val isDebugEnabled: Boolean = false,
+    val inputOiRegime: String = "NEUTRAL",
+    val inputOrderFlowRegime: String = "BALANCED FLOW",
+    val inputOiStrength: String = "LOW",
+    val inputOrderFlowStrength: String = "LOW",
+    val inputCvdConfirmation: String? = null,
+    val confidenceScore: Int = 0,
+    val ruleFired: String = "No rule fired (NEUTRAL)"
+)
+
+// 16. Flow Consensus State Model (Phase 5: Dual Engine Consensus & Trap Detection)
+data class FlowConsensusState(
+    val consensus: String = "NEUTRAL",
+    val badgeColor: Color = Color(0xFF9CA3AF),
+    val confidence: String = "LOW",
+    val confidenceColor: Color = Color(0xFF9CA3AF),
+    val oiRegimeDisplay: String = "NEUTRAL",
+    val orderFlowDisplay: String = "BALANCED FLOW",
+    val narrative: String = "No dominant market narrative detected.",
+    val debugState: FlowConsensusDebugState = FlowConsensusDebugState()
 )
 
 // The math engine to calculate candle-specific aggression (Dip vs Dump)

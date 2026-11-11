@@ -76,6 +76,7 @@ data class DashboardState(
     val orderBookImbalance: OrderBookImbalance? = null,
     val oiFlowRegime: OIFlowRegimeState = OIFlowRegimeState(),
     val orderFlowRegime: OrderFlowRegimeState = OrderFlowRegimeState(),
+    val flowConsensus: FlowConsensusState = FlowConsensusState(),
     val candles: List<CandleOrderFlow> = emptyList(),
     val cardOrder: List<TelemetryCardType> = TelemetryCardType.DEFAULT_ORDER,
     val connectionMode: ConnectionMode = ConnectionMode.AUTO,
@@ -178,6 +179,14 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    fun toggleFlowConsensusDebugMode() {
+        _uiState.update {
+            val currentDebug = it.flowConsensus.debugState
+            val toggled = currentDebug.copy(isDebugEnabled = !currentDebug.isDebugEnabled)
+            it.copy(flowConsensus = it.flowConsensus.copy(debugState = toggled))
+        }
+    }
+
     fun moveCardUp(card: TelemetryCardType) {
         val current = _uiState.value.cardOrder.toMutableList()
         val index = current.indexOf(card)
@@ -245,6 +254,129 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 _uiState.update { it.copy(connectionStatus = state.toDisplayString()) }
             }
         }
+    }
+
+    // --- PHASE 5: DUAL ENGINE CONSENSUS & TRAP DETECTION ENGINE ---
+    private fun evaluateFlowConsensus(
+        oiState: OIFlowRegimeState,
+        ofState: OrderFlowRegimeState
+    ): FlowConsensusState {
+        val oiRegime = oiState.regime.uppercase()
+        val ofRegime = ofState.regime.uppercase()
+        val oiStrength = oiState.strength.uppercase()
+        val cvdConfirm = oiState.confirmation
+
+        val (consensusText, badgeColor, narrativeText, ruleName) = when {
+            // STATE 1: STRONG BULLISH CONTINUATION
+            oiRegime == "NEW LONGS" && ofRegime == "BUY AGGRESSION" -> Quadruple(
+                "STRONG BULLISH CONTINUATION",
+                Color(0xFF10B981),
+                "Fresh longs entering while buyers control short-term order flow.",
+                "NEW_LONGS + BUY_AGGRESSION => STRONG_BULLISH_CONTINUATION"
+            )
+
+            // STATE 2: STRONG BEARISH CONTINUATION
+            oiRegime == "NEW SHORTS" && ofRegime == "SELL AGGRESSION" -> Quadruple(
+                "STRONG BEARISH CONTINUATION",
+                Color(0xFFEF4444),
+                "Fresh shorts entering while sellers control short-term order flow.",
+                "NEW_SHORTS + SELL_AGGRESSION => STRONG_BEARISH_CONTINUATION"
+            )
+
+            // STATE 3: SHORT TRAP
+            oiRegime == "NEW SHORTS" && ofRegime == "BUY AGGRESSION" -> Quadruple(
+                "SHORT TRAP",
+                Color(0xFFF59E0B),
+                "New shorts entering while buyers absorb and push price higher. Potential squeeze risk.",
+                "NEW_SHORTS + BUY_AGGRESSION => SHORT_TRAP"
+            )
+
+            // STATE 4: LONG TRAP
+            oiRegime == "NEW LONGS" && ofRegime == "SELL AGGRESSION" -> Quadruple(
+                "LONG TRAP",
+                Color(0xFFF97316),
+                "New longs entering while sellers control aggressive flow. Potential downside trap.",
+                "NEW_LONGS + SELL_AGGRESSION => LONG_TRAP"
+            )
+
+            // STATE 5: CAPITULATION REVERSAL
+            oiRegime == "LONG LIQUIDATIONS" && ofRegime == "BUY AGGRESSION" -> Quadruple(
+                "CAPITULATION REVERSAL",
+                Color(0xFFEAB308),
+                "Long liquidation event followed by aggressive buying pressure. Potential local bottom.",
+                "LONG_LIQUIDATIONS + BUY_AGGRESSION => CAPITULATION_REVERSAL"
+            )
+
+            // STATE 6: SHORT SQUEEZE
+            oiRegime == "SHORT COVERING" && ofRegime == "BUY AGGRESSION" -> Quadruple(
+                "SHORT SQUEEZE",
+                Color(0xFF22C55E),
+                "Shorts exiting while buyers continue lifting offers. Potential squeeze continuation.",
+                "SHORT_COVERING + BUY_AGGRESSION => SHORT_SQUEEZE"
+            )
+
+            // STATE 7: DISTRIBUTION
+            (oiRegime == "NEW LONGS" && ofRegime == "SELL_ABSORPTION") ||
+            (oiRegime == "NEW LONGS" && ofRegime == "BALANCED FLOW" && oiState.priceDeltaPercent < 0) -> Quadruple(
+                "DISTRIBUTION",
+                Color(0xFFF97316),
+                "Longs entering but aggressive buying unable to advance price efficiently. Potential distribution.",
+                "NEW_LONGS + SELL_ABSORPTION/STALL => DISTRIBUTION"
+            )
+
+            // STATE 8: ACCUMULATION
+            (oiRegime == "NEW SHORTS" && ofRegime == "BUY_ABSORPTION") ||
+            (oiRegime == "NEW SHORTS" && ofRegime == "BALANCED FLOW" && oiState.priceDeltaPercent > 0) -> Quadruple(
+                "ACCUMULATION",
+                Color(0xFF3B82F6),
+                "Selling pressure absorbed without meaningful price decline. Potential accumulation.",
+                "NEW_SHORTS + BUY_ABSORPTION/STALL => ACCUMULATION"
+            )
+
+            // STATE 9: NEUTRAL
+            else -> Quadruple(
+                "NEUTRAL",
+                Color(0xFF9CA3AF),
+                "No dominant market narrative detected.",
+                "NO_RULE_MATCH => NEUTRAL"
+            )
+        }
+
+        // Confidence Calculation Engine: LOW, MEDIUM, HIGH
+        var score = 0
+        if (oiStrength == "HIGH") score += 2 else if (oiStrength == "MEDIUM") score += 1
+        if (ofRegime == "BUY AGGRESSION" || ofRegime == "SELL AGGRESSION") score += 2
+        if (cvdConfirm == "CVD CONFIRMED") score += 2 else if (cvdConfirm == "DIVERGENCE") score -= 1
+
+        val (confText, confColor) = when {
+            score >= 4 -> "HIGH" to Color(0xFF10B981)
+            score >= 2 -> "MEDIUM" to Color(0xFFEAB308)
+            else -> "LOW" to Color(0xFF9CA3AF)
+        }
+
+        val isDebugActive = _uiState.value.flowConsensus.debugState.isDebugEnabled
+
+        val debugState = FlowConsensusDebugState(
+            isDebugEnabled = isDebugActive,
+            inputOiRegime = oiRegime,
+            inputOrderFlowRegime = ofRegime,
+            inputOiStrength = oiStrength,
+            inputOrderFlowStrength = if (ofRegime.contains("AGGRESSION")) "HIGH" else "MEDIUM",
+            inputCvdConfirmation = cvdConfirm,
+            confidenceScore = score,
+            ruleFired = ruleName
+        )
+
+        return FlowConsensusState(
+            consensus = consensusText,
+            badgeColor = badgeColor,
+            confidence = confText,
+            confidenceColor = confColor,
+            oiRegimeDisplay = oiRegime,
+            orderFlowDisplay = ofRegime,
+            narrative = narrativeText,
+            debugState = debugState
+        )
     }
 
     // --- PHASE 4 & 4.5: ORDER FLOW ENGINE (LIVE WS TRADES & DIAGNOSTICS) ---
@@ -356,20 +488,25 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
             warnings = warnings
         )
 
+        val newOrderFlowState = OrderFlowRegimeState(
+            regime = regimeStr,
+            badgeColor = colorVal,
+            buyVolume = buyVol,
+            sellVolume = sellVol,
+            netDelta = netDelta,
+            deltaPercent = deltaPct,
+            priceDeltaPercent = priceDeltaPct,
+            totalVolume = totalVol,
+            buildingWindow = isBuilding,
+            debugState = debugState
+        )
+
+        val consensusState = evaluateFlowConsensus(_uiState.value.oiFlowRegime, newOrderFlowState)
+
         _uiState.update {
             it.copy(
-                orderFlowRegime = OrderFlowRegimeState(
-                    regime = regimeStr,
-                    badgeColor = colorVal,
-                    buyVolume = buyVol,
-                    sellVolume = sellVol,
-                    netDelta = netDelta,
-                    deltaPercent = deltaPct,
-                    priceDeltaPercent = priceDeltaPct,
-                    totalVolume = totalVol,
-                    buildingWindow = isBuilding,
-                    debugState = debugState
-                )
+                orderFlowRegime = newOrderFlowState,
+                flowConsensus = consensusState
             )
         }
     }
@@ -418,6 +555,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 orderBookImbalance = null,
                 oiFlowRegime = OIFlowRegimeState(debugState = it.oiFlowRegime.debugState.copy(warnings = listOf("WARNING: Window Building"))),
                 orderFlowRegime = OrderFlowRegimeState(),
+                flowConsensus = FlowConsensusState(),
                 activeMode = effective,
                 error = null
             )
@@ -741,6 +879,8 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 "Unable to reach Binance REST API. Reconnecting WebSocket..."
             } else null
 
+            val consensusState = evaluateFlowConsensus(oiFlowRegimeState, _uiState.value.orderFlowRegime)
+
             _uiState.update {
                 it.copy(
                     isLoading = false,
@@ -752,6 +892,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                     positioningMatrix = positioningMatrix,
                     orderBookImbalance = finalImbalance,
                     oiFlowRegime = oiFlowRegimeState,
+                    flowConsensus = consensusState,
                     candles = finalKlines,
                     error = errorMessage
                 )

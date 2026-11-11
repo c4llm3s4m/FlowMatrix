@@ -196,11 +196,13 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
 
         val activeCandle = state.liveCandle ?: state.candles.lastOrNull()
 
-        // Filter cards based on AppMode (OI Flow Regime & Order Flow Regime are Copilot-only)
+        // Filter cards based on AppMode (V2 engines are Copilot-only)
         val visibleCards = remember(state.cardOrder, state.appMode) {
             if (state.appMode == AppMode.GEMINI) {
                 state.cardOrder.filter {
-                    it != TelemetryCardType.OI_FLOW_REGIME && it != TelemetryCardType.ORDER_FLOW_REGIME
+                    it != TelemetryCardType.OI_FLOW_REGIME &&
+                    it != TelemetryCardType.ORDER_FLOW_REGIME &&
+                    it != TelemetryCardType.FLOW_CONSENSUS
                 }
             } else {
                 state.cardOrder
@@ -312,6 +314,14 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                             onMoveDown = { viewModel.moveCardDown(cardType) },
                             onToggleDebug = { viewModel.toggleOrderFlowDebugMode() }
                         )
+                        TelemetryCardType.FLOW_CONSENSUS -> FlowConsensusCard(
+                            consensusState = state.flowConsensus,
+                            isFirst = isFirst,
+                            isLast = isLast,
+                            onMoveUp = { viewModel.moveCardUp(cardType) },
+                            onMoveDown = { viewModel.moveCardDown(cardType) },
+                            onToggleDebug = { viewModel.toggleFlowConsensusDebugMode() }
+                        )
                         TelemetryCardType.CVD_CHART -> CvdCard(
                             candles = state.candles,
                             activeCandle = activeCandle,
@@ -386,6 +396,133 @@ fun MetricCard(
             }
             Spacer(modifier = Modifier.height(10.dp))
             content()
+        }
+    }
+}
+
+// PHASE 5: Flow Consensus Engine Card (Copilot Mode Feature)
+@Composable
+fun FlowConsensusCard(
+    consensusState: FlowConsensusState,
+    isFirst: Boolean,
+    isLast: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onToggleDebug: () -> Unit
+) {
+    val debug = consensusState.debugState
+
+    MetricCard(
+        title = "Flow Consensus Engine",
+        isFirst = isFirst,
+        isLast = isLast,
+        onMoveUp = onMoveUp,
+        onMoveDown = onMoveDown,
+        headerExtra = {
+            Surface(
+                onClick = onToggleDebug,
+                color = if (debug.isDebugEnabled) MaterialTheme.colorScheme.primaryContainer else Color.Gray.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text(
+                    text = "[DEBUG]",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (debug.isDebugEnabled) MaterialTheme.colorScheme.onPrimaryContainer else Color.Gray,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+        }
+    ) {
+        // ROW 1: Consensus Badge
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Consensus", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Surface(
+                color = consensusState.badgeColor.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(
+                    text = consensusState.consensus.uppercase(),
+                    color = consensusState.badgeColor,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+        // ROW 2: Confidence Badge
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Confidence", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Surface(
+                color = consensusState.confidenceColor.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(
+                    text = consensusState.confidence,
+                    color = consensusState.confidenceColor,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+            }
+        }
+
+        // ROW 3: OI Regime Display
+        DataRow("OI Regime", consensusState.oiRegimeDisplay)
+
+        // ROW 4: Order Flow Display
+        DataRow("Order Flow", consensusState.orderFlowDisplay)
+
+        // ROW 5: Narrative Text Explanation
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top
+        ) {
+            Text("Narrative", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(80.dp))
+            Text(
+                text = consensusState.narrative,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f),
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        // --- DEBUG MODE SECTION ---
+        if (debug.isDebugEnabled) {
+            Spacer(modifier = Modifier.height(8.dp))
+            HorizontalDivider(color = GoldNeutral.copy(alpha = 0.4f))
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("🛠 CONSENSUS ENGINE DEBUG", fontSize = 11.sp, fontWeight = FontWeight.Black, color = GoldNeutral)
+
+                DebugHeader("CONSENSUS INPUTS")
+                DebugRow("Input OI Regime", debug.inputOiRegime)
+                DebugRow("Input Order Flow Regime", debug.inputOrderFlowRegime)
+                DebugRow("Input OI Strength", debug.inputOiStrength)
+                DebugRow("Input Order Flow Strength", debug.inputOrderFlowStrength)
+                DebugRow("CVD Confirmation", debug.inputCvdConfirmation ?: "NONE")
+
+                DebugHeader("CONFIDENCE ENGINE")
+                DebugRow("Confidence Score", "${debug.confidenceScore}")
+                DebugRow("Confidence Level", consensusState.confidence, consensusState.confidenceColor)
+
+                DebugHeader("RULE TRIGGERED")
+                DebugRow("Rule Fired", debug.ruleFired, consensusState.badgeColor)
+            }
         }
     }
 }
