@@ -570,16 +570,14 @@ fun OiFlowRegimeCard(
 
                 DebugHeader("SYSTEM STATE")
                 DebugRow("Current Symbol", symbol)
-                DebugRow("Active Timeframe", interval)
                 DebugRow("Current Regime", regimeState.regime)
                 DebugRow("Building Window", if (regimeState.buildingWindow) "TRUE" else "FALSE")
 
                 DebugHeader("SNAPSHOT BUFFER")
                 DebugRow("Snapshot Count", "${debug.snapshotCount}")
+                DebugRow("Anchor Age", "${debug.anchorSnapshotAgeSec} sec")
+                DebugRow("Oldest Snapshot", "${debug.oldestSnapshotAgeSec} sec")
                 DebugRow("Required Window", "${debug.requiredWindowSec} sec")
-                DebugRow("Oldest Snapshot Age", "${debug.oldestSnapshotAgeSec} sec")
-                DebugRow("Anchor Snapshot Age", "${debug.anchorSnapshotAgeSec} sec")
-                DebugRow("Latest Snapshot Age", "${debug.latestSnapshotAgeSec} sec")
                 DebugRow("Buffer Status", debug.bufferStatus, if (debug.bufferStatus == "READY") GreenPositive else Color.Gray)
 
                 DebugHeader("CURRENT VALUES")
@@ -594,10 +592,10 @@ fun OiFlowRegimeCard(
                 DebugRow("OI Delta", String.format("%+,.0f", debug.oiDelta))
                 DebugRow("OI Delta %", String.format("%+.2f%%", debug.oiDeltaPercent))
 
-                DebugHeader("THRESHOLD CHECKS")
-                DebugRow("Price Threshold (Req 0.15%)", String.format("Actual: %.2f%%", abs(debug.priceDeltaPercent)), if (debug.priceThresholdPass) GreenPositive else CoralNegative, if (debug.priceThresholdPass) "PASS" else "FAIL")
-                DebugRow("OI Threshold (Req 0.25%)", String.format("Actual: %.2f%%", abs(debug.oiDeltaPercent)), if (debug.oiThresholdPass) GreenPositive else CoralNegative, if (debug.oiThresholdPass) "PASS" else "FAIL")
-                DebugRow("Overall Threshold", if (debug.overallThresholdPass) "PASS" else "FAIL", if (debug.overallThresholdPass) GreenPositive else CoralNegative)
+                DebugHeader("THRESHOLD ENGINE")
+                DebugRow("Price Threshold", String.format("Req 0.15%% | Actual: %.2f%%", abs(debug.priceDeltaPercent)), if (debug.priceThresholdPass) GreenPositive else CoralNegative, if (debug.priceThresholdPass) "PASS" else "FAIL")
+                DebugRow("OI Threshold", String.format("Req 0.25%% | Actual: %.2f%%", abs(debug.oiDeltaPercent)), if (debug.oiThresholdPass) GreenPositive else CoralNegative, if (debug.oiThresholdPass) "PASS" else "FAIL")
+                DebugRow("Overall Result", if (debug.overallThresholdPass) "PASS" else "FAIL", if (debug.overallThresholdPass) GreenPositive else CoralNegative)
 
                 DebugHeader("REGIME ENGINE DEBUG")
                 DebugRow("Regime Logic", debug.regimeLogicCondition)
