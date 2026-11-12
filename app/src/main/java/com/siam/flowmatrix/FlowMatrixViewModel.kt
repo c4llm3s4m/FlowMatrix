@@ -94,6 +94,13 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     private val tradeSnapshotBuffer = ArrayDeque<TradeSnapshot>()
     private val tradeRateWindow = ArrayDeque<Long>()
 
+    // Consensus Memory Engine State
+    private var memoryLastConsensus: String? = null
+    private var memoryLastNarrative: String? = null
+    private var memoryLastTimestampMs: Long? = null
+    private var memoryLastBadgeColor: Color = Color(0xFF9CA3AF)
+    private val memoryHistoryList = ArrayDeque<ConsensusHistoryEvent>()
+
     private var lastValidRegime: String? = null
     private var lastOiPollTimeMs: Long = 0L
     private var lastPriceTickTimeMs: Long = 0L
@@ -149,6 +156,15 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         "15m" -> 900_000L
         "1h" -> 3_600_000L
         else -> 300_000L
+    }
+
+    private fun formatAge(ageMs: Long): String {
+        val sec = ageMs / 1000L
+        return when {
+            sec < 60 -> "${sec} sec ago"
+            sec < 3600 -> "${sec / 60} min ago"
+            else -> "${sec / 3600} hr ago"
+        }
     }
 
     fun setAppMode(mode: AppMode) {
@@ -256,7 +272,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    // --- PHASE 5: DUAL ENGINE CONSENSUS & TRAP DETECTION ENGINE ---
+    // --- PHASE 5 & MEMORY ENGINE: DUAL ENGINE CONSENSUS & TRAP DETECTION ENGINE ---
     private fun evaluateFlowConsensus(
         oiState: OIFlowRegimeState,
         ofState: OrderFlowRegimeState
@@ -266,7 +282,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         val oiStrength = oiState.strength.uppercase()
         val cvdConfirm = oiState.confirmation
 
-        val (consensusText, badgeColor, narrativeText, ruleName) = when {
+        val (candidateConsensus, candidateBadgeColor, narrativeText, ruleName) = when {
             // STATE 1: STRONG BULLISH CONTINUATION
             oiRegime == "NEW LONGS" && ofRegime == "BUY AGGRESSION" -> Quadruple(
                 "STRONG BULLISH CONTINUATION",
@@ -342,6 +358,33 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
             )
         }
 
+        // --- CONSENSUS MEMORY LAYER UPDATE RULES ---
+        val now = System.currentTimeMillis()
+        val isNonNeutral = candidateConsensus != "NEUTRAL" && candidateConsensus != "BUILDING WINDOW"
+        val activeConsensus = _uiState.value.flowConsensus.consensus
+
+        // When consensus changes to a new non-neutral state, promote prior non-neutral state to Memory!
+        if (isNonNeutral && candidateConsensus != activeConsensus) {
+            if (activeConsensus != "NEUTRAL" && activeConsensus != "BUILDING WINDOW") {
+                memoryLastConsensus = activeConsensus
+                memoryLastNarrative = _uiState.value.flowConsensus.narrative
+                memoryLastTimestampMs = now
+                memoryLastBadgeColor = _uiState.value.flowConsensus.badgeColor
+
+                val event = ConsensusHistoryEvent(
+                    timestampFormatted = timeFormatter.format(Date(now)),
+                    consensus = activeConsensus,
+                    badgeColor = _uiState.value.flowConsensus.badgeColor
+                )
+                memoryHistoryList.addFirst(event)
+                while (memoryHistoryList.size > 5) {
+                    memoryHistoryList.removeLast()
+                }
+            }
+        }
+
+        val prevAgeStr = if (memoryLastTimestampMs != null) formatAge(now - memoryLastTimestampMs!!) else null
+
         // Confidence Calculation Engine: LOW, MEDIUM, HIGH
         var score = 0
         if (oiStrength == "HIGH") score += 2 else if (oiStrength == "MEDIUM") score += 1
@@ -368,13 +411,18 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         )
 
         return FlowConsensusState(
-            consensus = consensusText,
-            badgeColor = badgeColor,
+            consensus = candidateConsensus,
+            badgeColor = candidateBadgeColor,
             confidence = confText,
             confidenceColor = confColor,
             oiRegimeDisplay = oiRegime,
             orderFlowDisplay = ofRegime,
             narrative = narrativeText,
+            previousConsensus = memoryLastConsensus,
+            previousConsensusColor = memoryLastBadgeColor,
+            previousNarrative = memoryLastNarrative,
+            previousConsensusAgeFormatted = prevAgeStr,
+            consensusHistory = memoryHistoryList.toList(),
             debugState = debugState
         )
     }
@@ -542,6 +590,10 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         snapshotBuffer.clear()
         tradeSnapshotBuffer.clear()
         tradeRateWindow.clear()
+        memoryLastConsensus = null
+        memoryLastNarrative = null
+        memoryLastTimestampMs = null
+        memoryHistoryList.clear()
         lastValidRegime = null
         lastRegimeTransitionTimeMs = 0L
         val effective = detectEffectiveMode(_uiState.value.connectionMode)

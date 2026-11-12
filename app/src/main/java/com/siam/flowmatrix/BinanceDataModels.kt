@@ -279,7 +279,14 @@ data class OrderFlowRegimeState(
     val debugState: OrderFlowRegimeDebugState = OrderFlowRegimeDebugState()
 )
 
-// 15. Flow Consensus Diagnostics / Debug State Model (Phase 5)
+// 15. Flow Consensus History Event Model (Consensus Memory Engine)
+data class ConsensusHistoryEvent(
+    val timestampFormatted: String,
+    val consensus: String,
+    val badgeColor: Color
+)
+
+// 16. Flow Consensus Diagnostics / Debug State Model
 data class FlowConsensusDebugState(
     val isDebugEnabled: Boolean = false,
     val inputOiRegime: String = "NEUTRAL",
@@ -291,7 +298,7 @@ data class FlowConsensusDebugState(
     val ruleFired: String = "No rule fired (NEUTRAL)"
 )
 
-// 16. Flow Consensus State Model (Phase 5: Dual Engine Consensus & Trap Detection)
+// 17. Flow Consensus State Model (Dual Engine Consensus & Memory Engine)
 data class FlowConsensusState(
     val consensus: String = "NEUTRAL",
     val badgeColor: Color = Color(0xFF9CA3AF),
@@ -300,6 +307,11 @@ data class FlowConsensusState(
     val oiRegimeDisplay: String = "NEUTRAL",
     val orderFlowDisplay: String = "BALANCED FLOW",
     val narrative: String = "No dominant market narrative detected.",
+    val previousConsensus: String? = null,
+    val previousConsensusColor: Color = Color(0xFF9CA3AF),
+    val previousNarrative: String? = null,
+    val previousConsensusAgeFormatted: String? = null,
+    val consensusHistory: List<ConsensusHistoryEvent> = emptyList(),
     val debugState: FlowConsensusDebugState = FlowConsensusDebugState()
 )
 

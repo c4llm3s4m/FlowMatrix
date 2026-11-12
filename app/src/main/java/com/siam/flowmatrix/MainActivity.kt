@@ -400,7 +400,7 @@ fun MetricCard(
     }
 }
 
-// PHASE 5: Flow Consensus Engine Card (Copilot Mode Feature)
+// PHASE 5: Flow Consensus Engine Card with Memory Engine (Copilot Mode Feature)
 @Composable
 fun FlowConsensusCard(
     consensusState: FlowConsensusState,
@@ -500,7 +500,56 @@ fun FlowConsensusCard(
             )
         }
 
-        // --- DEBUG MODE SECTION ---
+        // ROW 6: Last Consensus (Consensus Memory Engine)
+        if (consensusState.previousConsensus != null) {
+            HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Last Consensus", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (consensusState.previousConsensusAgeFormatted != null) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("(${consensusState.previousConsensusAgeFormatted})", fontSize = 11.sp, color = Color.Gray)
+                    }
+                }
+                Surface(
+                    color = consensusState.previousConsensusColor.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = consensusState.previousConsensus.uppercase(),
+                        color = consensusState.previousConsensusColor,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            // ROW 7: Last Narrative
+            if (consensusState.previousNarrative != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Text("Last Narrative", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.width(90.dp))
+                    Text(
+                        text = consensusState.previousNarrative,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+
+        // --- DEBUG MODE SECTION & CONSENSUS HISTORY ---
         if (debug.isDebugEnabled) {
             Spacer(modifier = Modifier.height(8.dp))
             HorizontalDivider(color = GoldNeutral.copy(alpha = 0.4f))
@@ -522,6 +571,13 @@ fun FlowConsensusCard(
 
                 DebugHeader("RULE TRIGGERED")
                 DebugRow("Rule Fired", debug.ruleFired, consensusState.badgeColor)
+
+                if (consensusState.consensusHistory.isNotEmpty()) {
+                    DebugHeader("CONSENSUS HISTORY (LAST 5 EVENTS)")
+                    consensusState.consensusHistory.forEach { event ->
+                        DebugRow(event.timestampFormatted, event.consensus, event.badgeColor)
+                    }
+                }
             }
         }
     }
