@@ -13,8 +13,8 @@ import java.util.concurrent.TimeUnit
 
 class BinanceDataFetcher {
     private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(2500, TimeUnit.MILLISECONDS)
+        .readTimeout(2500, TimeUnit.MILLISECONDS)
         .build()
 
     private val json = Json { ignoreUnknownKeys = true }

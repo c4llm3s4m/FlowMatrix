@@ -500,53 +500,51 @@ fun FlowConsensusCard(
             )
         }
 
+        HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+
         // ROW 6: Last Consensus (Consensus Memory Engine)
-        if (consensusState.previousConsensus != null) {
-            HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
-
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Last Consensus", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (consensusState.previousConsensusAgeFormatted != null) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("(${consensusState.previousConsensusAgeFormatted})", fontSize = 11.sp, color = Color.Gray)
+                }
+            }
+            val lastConsText = consensusState.previousConsensus ?: "None"
+            val lastConsColor = if (consensusState.previousConsensus != null) consensusState.previousConsensusColor else Color.Gray
+            Surface(
+                color = lastConsColor.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(12.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Last Consensus", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (consensusState.previousConsensusAgeFormatted != null) {
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("(${consensusState.previousConsensusAgeFormatted})", fontSize = 11.sp, color = Color.Gray)
-                    }
-                }
-                Surface(
-                    color = consensusState.previousConsensusColor.copy(alpha = 0.15f),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text(
-                        text = consensusState.previousConsensus.uppercase(),
-                        color = consensusState.previousConsensusColor,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                    )
-                }
+                Text(
+                    text = lastConsText.uppercase(),
+                    color = lastConsColor,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                )
             }
+        }
 
-            // ROW 7: Last Narrative
-            if (consensusState.previousNarrative != null) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top
-                ) {
-                    Text("Last Narrative", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.width(90.dp))
-                    Text(
-                        text = consensusState.previousNarrative,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
+        // ROW 7: Last Narrative
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top
+        ) {
+            Text("Last Narrative", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.width(90.dp))
+            Text(
+                text = consensusState.previousNarrative ?: "Awaiting first non-neutral consensus signal.",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                modifier = Modifier.weight(1f)
+            )
         }
 
         // --- DEBUG MODE SECTION & CONSENSUS HISTORY ---
@@ -572,11 +570,13 @@ fun FlowConsensusCard(
                 DebugHeader("RULE TRIGGERED")
                 DebugRow("Rule Fired", debug.ruleFired, consensusState.badgeColor)
 
+                DebugHeader("CONSENSUS HISTORY (LAST 5 EVENTS)")
                 if (consensusState.consensusHistory.isNotEmpty()) {
-                    DebugHeader("CONSENSUS HISTORY (LAST 5 EVENTS)")
                     consensusState.consensusHistory.forEach { event ->
                         DebugRow(event.timestampFormatted, event.consensus, event.badgeColor)
                     }
+                } else {
+                    DebugRow("History Status", "No history recorded yet", Color.Gray)
                 }
             }
         }

@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -238,7 +239,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
             wsManager.liveCandle.collect { liveTick ->
                 if (liveTick != null) {
                     lastPriceTickTimeMs = System.currentTimeMillis()
-                    _uiState.update { it.copy(liveCandle = liveTick) }
+                    _uiState.update { it.copy(liveCandle = liveTick, isLoading = false) }
                 }
             }
         }
@@ -554,7 +555,8 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.update {
             it.copy(
                 orderFlowRegime = newOrderFlowState,
-                flowConsensus = consensusState
+                flowConsensus = consensusState,
+                isLoading = false
             )
         }
     }
@@ -622,19 +624,22 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         val macroPeriod = if (interval == "1m") "5m" else interval
 
         coroutineScope {
-            val klinesDeferred = async { runCatching { fetcher.getCandleOrderFlow(symbol, interval) }.getOrDefault(emptyList()) }
-            val oiDeferred = async { runCatching { fetcher.getOpenInterestHistory(symbol, macroPeriod) }.getOrDefault(emptyList()) }
-            val takerLSDeferred = async { runCatching { fetcher.getTakerLongShortRatio(symbol, macroPeriod) }.getOrDefault(emptyList()) }
-            val globalLSDeferred = async { runCatching { fetcher.getGlobalLongShortRatio(symbol, macroPeriod) }.getOrDefault(emptyList()) }
-            val topAccountDeferred = async { runCatching { fetcher.getTopTraderAccountRatio(symbol, macroPeriod) }.getOrDefault(emptyList()) }
-            val topPositionDeferred = async { runCatching { fetcher.getTopTraderPositionRatio(symbol, macroPeriod) }.getOrDefault(emptyList()) }
+            val klinesDeferred = async { runCatching { withTimeoutOrNull(2500L) { fetcher.getCandleOrderFlow(symbol, interval) } }.getOrNull() ?: emptyList() }
+            val oiDeferred = async { runCatching { withTimeoutOrNull(2500L) { fetcher.getOpenInterestHistory(symbol, macroPeriod) } }.getOrNull() ?: emptyList() }
+            val takerLSDeferred = async { runCatching { withTimeoutOrNull(2500L) { fetcher.getTakerLongShortRatio(symbol, macroPeriod) } }.getOrNull() ?: emptyList() }
+            val globalLSDeferred = async { runCatching { withTimeoutOrNull(2500L) { fetcher.getGlobalLongShortRatio(symbol, macroPeriod) } }.getOrNull() ?: emptyList() }
+            val topAccountDeferred = async { runCatching { withTimeoutOrNull(2500L) { fetcher.getTopTraderAccountRatio(symbol, macroPeriod) } }.getOrNull() ?: emptyList() }
+            val topPositionDeferred = async { runCatching { withTimeoutOrNull(2500L) { fetcher.getTopTraderPositionRatio(symbol, macroPeriod) } }.getOrNull() ?: emptyList() }
             val depthDeferred = async {
-                runCatching { fetcher.getOrderBookDepth(symbol, limit = 20) }.getOrElse {
-                    runCatching { fetcher.getSpotOrderBookDepth(symbol, limit = 20) }.getOrNull()
-                }
+                runCatching {
+                    withTimeoutOrNull(2000L) { fetcher.getOrderBookDepth(symbol, limit = 20) }
+                        ?: withTimeoutOrNull(2000L) { fetcher.getSpotOrderBookDepth(symbol, limit = 20) }
+                }.getOrNull()
             }
 
             val klines = klinesDeferred.await()
+            _uiState.update { it.copy(isLoading = false) }
+
             val oi = oiDeferred.await()
             val takerLS = takerLSDeferred.await()
             val globalLS = globalLSDeferred.await()
