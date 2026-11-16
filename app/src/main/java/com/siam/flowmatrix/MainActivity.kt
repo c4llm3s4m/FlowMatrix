@@ -62,9 +62,10 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
     val state by viewModel.uiState.collectAsState()
     var searchQuery by remember { mutableStateOf("") }
     var showCardVisibilityDialog by remember { mutableStateOf(false) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        // --- TOP BAR: TITLE & LIVE STATUS ---
+        // --- TOP BAR: TITLE, LIVE STATUS, CARDS & GEAR SETTINGS ---
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -84,11 +85,8 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                 TextButton(onClick = { showCardVisibilityDialog = true }) {
                     Text("👁 CARDS", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
                 }
-                TextButton(onClick = { viewModel.resetCardOrder() }) {
-                    Text("⚙ RESET", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = MaterialTheme.colorScheme.secondary)
-                }
-                TextButton(onClick = { viewModel.refresh() }) {
-                    Text("↻ REFRESH", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                IconButton(onClick = { showSettingsDialog = true }) {
+                    Text("⚙", fontSize = 20.sp, color = MaterialTheme.colorScheme.primary)
                 }
             }
         }
@@ -158,28 +156,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
             }
         }
 
-        // --- CONNECTION MODE SELECTOR (Broadband vs Hotspot / Cellular) ---
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("Network:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            ConnectionMode.entries.forEach { mode ->
-                FilterChip(
-                    selected = state.connectionMode == mode,
-                    onClick = { viewModel.setConnectionMode(mode) },
-                    label = {
-                        val activeLabel = if (state.connectionMode == ConnectionMode.AUTO && mode == ConnectionMode.AUTO) {
-                            "🌐 AUTO (${state.activeMode.streamIntervalMs})"
-                        } else mode.label
-                        Text(activeLabel, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    }
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
         if (state.isLoading) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
@@ -379,6 +356,129 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
             }
         )
     }
+
+    // --- GEAR SETTINGS & NETWORK MODAL DIALOG ---
+    if (showSettingsDialog) {
+        SettingsDialog(
+            connectionMode = state.connectionMode,
+            activeMode = state.activeMode,
+            onSelectConnectionMode = { mode ->
+                viewModel.setConnectionMode(mode)
+            },
+            onRefresh = {
+                viewModel.refresh()
+            },
+            onResetLayout = {
+                viewModel.resetCardOrder()
+            },
+            onDismiss = {
+                showSettingsDialog = false
+            }
+        )
+    }
+}
+
+// Settings & Network Menu Modal Dialog (Accessible via Top Gear Icon ⚙)
+@Composable
+fun SettingsDialog(
+    connectionMode: ConnectionMode,
+    activeMode: ConnectionMode,
+    onSelectConnectionMode: (ConnectionMode) -> Unit,
+    onRefresh: () -> Unit,
+    onResetLayout: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "⚙ SETTINGS & PREFERENCES",
+                fontWeight = FontWeight.Black,
+                fontSize = 16.sp,
+                color = MaterialTheme.colorScheme.primary
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "NETWORK CONNECTION MODE",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Black,
+                    color = GoldNeutral
+                )
+
+                ConnectionMode.entries.forEach { mode ->
+                    val isSelected = connectionMode == mode
+                    Surface(
+                        onClick = { onSelectConnectionMode(mode) },
+                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = { onSelectConnectionMode(mode) }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            val displayLabel = if (connectionMode == ConnectionMode.AUTO && mode == ConnectionMode.AUTO) {
+                                "🌐 AUTO DETECT (${activeMode.streamIntervalMs})"
+                            } else mode.label
+                            Text(
+                                text = displayLabel,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                Text(
+                    text = "QUICK ACTIONS",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Black,
+                    color = GoldNeutral
+                )
+
+                OutlinedButton(
+                    onClick = {
+                        onRefresh()
+                        onDismiss()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("↻ REFRESH DATA & RECONNECT", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        onResetLayout()
+                        onDismiss()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.secondary)
+                ) {
+                    Text("⚙ RESET CARD LAYOUT", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("CLOSE", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    )
 }
 
 // Card Visibility Checkbox Selection Modal Dialog
