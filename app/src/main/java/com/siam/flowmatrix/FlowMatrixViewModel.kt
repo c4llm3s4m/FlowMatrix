@@ -42,6 +42,18 @@ class CardOrderPreferences(context: Context) {
         prefs.edit().putString("card_order_v1", stringToSave).apply()
     }
 
+    fun getHiddenCards(): Set<TelemetryCardType> {
+        val savedString = prefs.getString("hidden_cards_v1", "") ?: ""
+        if (savedString.isBlank()) return emptySet()
+        val ids = savedString.split(",")
+        return ids.mapNotNull { TelemetryCardType.fromId(it) }.toSet()
+    }
+
+    fun saveHiddenCards(hiddenCards: Set<TelemetryCardType>) {
+        val stringToSave = hiddenCards.joinToString(",") { it.id }
+        prefs.edit().putString("hidden_cards_v1", stringToSave).apply()
+    }
+
     fun getConnectionMode(): ConnectionMode {
         val savedId = prefs.getString("connection_mode_v1", ConnectionMode.AUTO.id) ?: ConnectionMode.AUTO.id
         return ConnectionMode.fromId(savedId)
@@ -81,6 +93,7 @@ data class DashboardState(
     val smpeUiState: SmpeUiState = SmpeUiState(),
     val candles: List<CandleOrderFlow> = emptyList(),
     val cardOrder: List<TelemetryCardType> = TelemetryCardType.DEFAULT_ORDER,
+    val hiddenCards: Set<TelemetryCardType> = emptySet(),
     val connectionMode: ConnectionMode = ConnectionMode.AUTO,
     val activeMode: ConnectionMode = ConnectionMode.BROADBAND,
     val appMode: AppMode = AppMode.GEMINI,
@@ -122,6 +135,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     private val _uiState = MutableStateFlow(
         DashboardState(
             cardOrder = prefsManager.getCardOrder(),
+            hiddenCards = prefsManager.getHiddenCards(),
             connectionMode = prefsManager.getConnectionMode(),
             appMode = prefsManager.getAppMode()
         )
@@ -223,6 +237,22 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    fun setCardVisible(card: TelemetryCardType, isVisible: Boolean) {
+        val current = _uiState.value.hiddenCards.toMutableSet()
+        if (isVisible) {
+            current.remove(card)
+        } else {
+            current.add(card)
+        }
+        _uiState.update { it.copy(hiddenCards = current) }
+        prefsManager.saveHiddenCards(current)
+    }
+
+    fun showAllCards() {
+        _uiState.update { it.copy(hiddenCards = emptySet()) }
+        prefsManager.saveHiddenCards(emptySet())
+    }
+
     fun moveCardUp(card: TelemetryCardType) {
         val current = _uiState.value.cardOrder.toMutableList()
         val index = current.indexOf(card)
@@ -249,8 +279,9 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
 
     fun resetCardOrder() {
         val defaultOrder = TelemetryCardType.DEFAULT_ORDER
-        _uiState.update { it.copy(cardOrder = defaultOrder) }
+        _uiState.update { it.copy(cardOrder = defaultOrder, hiddenCards = emptySet()) }
         prefsManager.saveCardOrder(defaultOrder)
+        prefsManager.saveHiddenCards(emptySet())
     }
 
     private fun listenToWebSocket() {

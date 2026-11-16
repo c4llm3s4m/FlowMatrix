@@ -10,7 +10,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -59,6 +61,7 @@ class MainActivity : ComponentActivity() {
 fun DashboardScreen(viewModel: FlowMatrixViewModel) {
     val state by viewModel.uiState.collectAsState()
     var searchQuery by remember { mutableStateOf("") }
+    var showCardVisibilityDialog by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         // --- TOP BAR: TITLE & LIVE STATUS ---
@@ -78,8 +81,11 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { showCardVisibilityDialog = true }) {
+                    Text("👁 CARDS", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                }
                 TextButton(onClick = { viewModel.resetCardOrder() }) {
-                    Text("⚙ RESET LAYOUT", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = MaterialTheme.colorScheme.secondary)
+                    Text("⚙ RESET", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = MaterialTheme.colorScheme.secondary)
                 }
                 TextButton(onClick = { viewModel.refresh() }) {
                     Text("↻ REFRESH", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
@@ -206,17 +212,19 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
 
         val activeCandle = state.liveCandle ?: state.candles.lastOrNull()
 
-        // Filter cards based on AppMode (V2 engines are Copilot-only)
-        val visibleCards = remember(state.cardOrder, state.appMode) {
-            if (state.appMode == AppMode.GEMINI) {
-                state.cardOrder.filter {
-                    it != TelemetryCardType.OI_FLOW_REGIME &&
-                    it != TelemetryCardType.ORDER_FLOW_REGIME &&
-                    it != TelemetryCardType.FLOW_CONSENSUS &&
-                    it != TelemetryCardType.SMART_MONEY_POSITION
+        // Filter cards based on AppMode and User Hidden Cards Selection
+        val visibleCards = remember(state.cardOrder, state.appMode, state.hiddenCards) {
+            state.cardOrder.filter { cardType ->
+                val isAppModeAllowed = if (state.appMode == AppMode.GEMINI) {
+                    cardType != TelemetryCardType.OI_FLOW_REGIME &&
+                    cardType != TelemetryCardType.ORDER_FLOW_REGIME &&
+                    cardType != TelemetryCardType.FLOW_CONSENSUS &&
+                    cardType != TelemetryCardType.SMART_MONEY_POSITION
+                } else {
+                    true
                 }
-            } else {
-                state.cardOrder
+                val isUserVisible = cardType !in state.hiddenCards
+                isAppModeAllowed && isUserVisible
             }
         }
 
@@ -354,6 +362,95 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
             }
         }
     }
+
+    // --- CARD VISIBILITY SELECTION MODAL DIALOG ---
+    if (showCardVisibilityDialog) {
+        CardVisibilityDialog(
+            allCards = TelemetryCardType.entries,
+            hiddenCards = state.hiddenCards,
+            onToggleVisibility = { card, isVisible ->
+                viewModel.setCardVisible(card, isVisible)
+            },
+            onShowAll = {
+                viewModel.showAllCards()
+            },
+            onDismiss = {
+                showCardVisibilityDialog = false
+            }
+        )
+    }
+}
+
+// Card Visibility Checkbox Selection Modal Dialog
+@Composable
+fun CardVisibilityDialog(
+    allCards: List<TelemetryCardType>,
+    hiddenCards: Set<TelemetryCardType>,
+    onToggleVisibility: (TelemetryCardType, Boolean) -> Unit,
+    onShowAll: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "MANAGE DASHBOARD CARDS",
+                fontWeight = FontWeight.Black,
+                fontSize = 16.sp,
+                color = MaterialTheme.colorScheme.primary
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 380.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = "Check cards to show, uncheck to hide:",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+
+                allCards.forEach { card ->
+                    val isVisible = card !in hiddenCards
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = isVisible,
+                            onCheckedChange = { isChecked ->
+                                onToggleVisibility(card, isChecked)
+                            }
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = card.title,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (isVisible) MaterialTheme.colorScheme.onSurface else Color.Gray
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onShowAll) {
+                Text("SHOW ALL", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("CLOSE", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
+            }
+        }
+    )
 }
 
 // Reusable Metric Card Container with Subtle Reorder Up/Down Controls & Optional Action
