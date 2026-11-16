@@ -1,6 +1,11 @@
 package com.siam.flowmatrix
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -21,6 +26,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -40,6 +46,43 @@ fun formatCompactUsdt(amount: Double): String {
         absAmount >= 1_000 -> String.format("$%.2fK", amount / 1_000.0)
         else -> String.format("$%.2f", amount)
     }
+}
+
+fun checkIsIgnoringBatteryOptimizations(context: Context): Boolean {
+    val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return false
+    return pm.isIgnoringBatteryOptimizations(context.packageName)
+}
+
+fun requestIgnoreBatteryOptimizations(context: Context) {
+    try {
+        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = Uri.parse("package:${context.packageName}")
+        }
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        openAppDetailsSettings(context)
+    }
+}
+
+fun openHyperOsAutostartSettings(context: Context) {
+    try {
+        val miuiIntent = Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+            setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity")
+            putExtra("extra_pkgname", context.packageName)
+        }
+        context.startActivity(miuiIntent)
+    } catch (_: Exception) {
+        openAppDetailsSettings(context)
+    }
+}
+
+fun openAppDetailsSettings(context: Context) {
+    try {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.parse("package:${context.packageName}")
+        }
+        context.startActivity(intent)
+    } catch (_: Exception) {}
 }
 
 class MainActivity : ComponentActivity() {
@@ -440,6 +483,57 @@ fun SettingsDialog(
                             )
                         }
                     }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                Text(
+                    text = "HYPEROS & BACKGROUND PROTECTION",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Black,
+                    color = GoldNeutral
+                )
+
+                val context = LocalContext.current
+                val isExempted = remember(context) { checkIsIgnoringBatteryOptimizations(context) }
+
+                Surface(
+                    color = if (isExempted) GreenPositive.copy(alpha = 0.15f) else GoldNeutral.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (isExempted) "🟢 KEEP ALIVE ACTIVE" else "🟡 KEEP ALIVE: UNEXEMPTED",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (isExempted) GreenPositive else GoldNeutral
+                            )
+                            if (!isExempted) {
+                                TextButton(onClick = { requestIgnoreBatteryOptimizations(context) }) {
+                                    Text("EXEMPT", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Exempt Flow Matrix from battery saver restrictions so HyperOS does not pause background WebSocket streams when display locks.",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = { openHyperOsAutostartSettings(context) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("⚡ HYPEROS AUTOSTART & PERMISSIONS", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
