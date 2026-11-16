@@ -303,9 +303,9 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         val oiStrength = oiState.strength.uppercase()
         val cvdConfirm = oiState.confirmation
 
-        // --- PHASE 6 (PART 2): INVENTORY VS FLOW CONFLICT DETECTOR ---
-        val inventoryIncreasing = smpeState.longCapitalDeltaPct >= 0.50 || smpeState.inventoryMomentum >= 0.75
-        val inventoryDecreasing = smpeState.longCapitalDeltaPct <= -0.50 || smpeState.inventoryMomentum <= -0.75
+        // --- PHASE 6: INVENTORY VS FLOW CONFLICT DETECTOR (TUNED 0.20% THRESHOLD) ---
+        val inventoryIncreasing = smpeState.longCapitalDeltaPct >= 0.20 || smpeState.inventoryMomentum >= 0.30
+        val inventoryDecreasing = smpeState.longCapitalDeltaPct <= -0.20 || smpeState.inventoryMomentum <= -0.30
         val flowBuying = ofRegime == "BUY AGGRESSION"
         val flowSelling = ofRegime == "SELL AGGRESSION"
 
@@ -317,7 +317,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
             else -> "ALIGNED / BALANCED" to "NEUTRAL"
         }
 
-        // --- PHASE 6 (PART 2): PRIORITY HIERARCHY & CONSENSUS OVERRIDE ---
+        // --- PHASE 6: PRIORITY HIERARCHY & CONSENSUS OVERRIDE ---
         val isSmpeOverride = smpeState.regime == "SPONSORED_RALLY" &&
             (oiRegime == "NEW LONGS" || oiRegime == "SHORT COVERING") &&
             (ofRegime == "SELL AGGRESSION" && abs(ofState.deltaPercent) < 25.0)
@@ -993,15 +993,23 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                         capitalRatio = capitalRatio
                     )
                 )
-                while (smartMoneySnapshotBuffer.size > 60) {
+                while (smartMoneySnapshotBuffer.size > 20) {
                     smartMoneySnapshotBuffer.removeFirst()
                 }
             }
 
-            // Baseline selection: snapshot from ~60s..180s prior (or first if warming up)
-            val smpeBaseline = smartMoneySnapshotBuffer.lastOrNull { (now - it.timestampMs) in 60_000L..180_000L }
-                ?: smartMoneySnapshotBuffer.firstOrNull()
-                ?: SmartMoneySnapshot(now, currentPrice, longCapital, shortCapital, longPositionPct, shortPositionPct, capitalRatio)
+            // 5-Minute Baseline Anchor Fix:
+            // Anchor to the most recent snapshot whose position percentages differ from the newest snapshot.
+            // Falls back to oldest snapshot in buffer if all snapshots in buffer have identical position percentages.
+            val latestSmpeSnapshot = smartMoneySnapshotBuffer.lastOrNull()
+            val smpeBaseline = if (latestSmpeSnapshot != null) {
+                smartMoneySnapshotBuffer.lastOrNull { snapshot ->
+                    snapshot.longPositionPct != latestSmpeSnapshot.longPositionPct ||
+                    snapshot.shortPositionPct != latestSmpeSnapshot.shortPositionPct
+                } ?: smartMoneySnapshotBuffer.firstOrNull() ?: latestSmpeSnapshot
+            } else {
+                SmartMoneySnapshot(now, currentPrice, longCapital, shortCapital, longPositionPct, shortPositionPct, capitalRatio)
+            }
 
             val longCapitalDelta = longCapital - smpeBaseline.longCapital
             val shortCapitalDelta = shortCapital - smpeBaseline.shortCapital
@@ -1021,35 +1029,35 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 else -> "EXTREME SPONSORSHIP" to Color(0xFF00E676)
             }
 
-            // Position Regime Classification
+            // Position Regime Classification (Tuned 0.20% Sensitivity Threshold)
             val satisfiesSmpeThreshold = smartMoneySnapshotBuffer.size >= 2 &&
-                (abs(longCapitalDeltaPct) >= 0.50 || abs(shortCapitalDeltaPct) >= 0.50)
+                (abs(longCapitalDeltaPct) >= 0.20 || abs(shortCapitalDeltaPct) >= 0.20)
 
             val (smpeRegimeKey, smpeRegimeColor, smpeRuleEvaluated) = when {
                 !satisfiesSmpeThreshold -> Triple(
                     "NEUTRAL",
                     Color(0xFF9CA3AF),
-                    "THRESHOLD_NOT_MET (Requires >=0.5% capital delta)"
+                    "THRESHOLD_NOT_MET (Requires >=0.20% capital delta)"
                 )
-                longCapitalDeltaPct >= 0.50 && shortCapitalDeltaPct <= -0.25 && smpePriceDeltaPct > 0.25 -> Triple(
+                longCapitalDeltaPct >= 0.20 && shortCapitalDeltaPct <= -0.10 && smpePriceDeltaPct > 0.10 -> Triple(
                     "SPONSORED_RALLY",
                     Color(0xFF10B981),
-                    "longCapitalDeltaPct >= 0.50 && shortCapitalDeltaPct <= -0.25 && priceDeltaPct > 0.25 => SPONSORED_RALLY"
+                    "longCapitalDeltaPct >= 0.20 && shortCapitalDeltaPct <= -0.10 && priceDeltaPct > 0.10 => SPONSORED_RALLY"
                 )
-                longCapitalDeltaPct >= 0.50 && smpePriceDeltaPct in -0.25..0.75 -> Triple(
+                longCapitalDeltaPct >= 0.20 && smpePriceDeltaPct in -0.25..0.75 -> Triple(
                     "ACCUMULATION",
                     Color(0xFF3B82F6),
-                    "longCapitalDeltaPct >= 0.50 && priceDeltaPct in -0.25..0.75 => ACCUMULATION"
+                    "longCapitalDeltaPct >= 0.20 && priceDeltaPct in -0.25..0.75 => ACCUMULATION"
                 )
-                longCapitalDeltaPct <= -1.50 && (shortCapitalDeltaPct >= 0.50 || smpePriceDeltaPct < -0.25) -> Triple(
+                longCapitalDeltaPct <= -0.60 && (shortCapitalDeltaPct >= 0.20 || smpePriceDeltaPct < -0.20) -> Triple(
                     "ABANDONMENT",
                     Color(0xFFEF4444),
-                    "longCapitalDeltaPct <= -1.50 && (shortCapitalDeltaPct >= 0.50 || priceDeltaPct < -0.25) => ABANDONMENT"
+                    "longCapitalDeltaPct <= -0.60 && (shortCapitalDeltaPct >= 0.20 || priceDeltaPct < -0.20) => ABANDONMENT"
                 )
-                longCapitalDeltaPct <= -0.50 && smpePriceDeltaPct in -0.25..0.50 -> Triple(
+                longCapitalDeltaPct <= -0.20 && smpePriceDeltaPct in -0.25..0.50 -> Triple(
                     "DISTRIBUTION",
                     Color(0xFFF97316),
-                    "longCapitalDeltaPct <= -0.50 && priceDeltaPct in -0.25..0.50 => DISTRIBUTION"
+                    "longCapitalDeltaPct <= -0.20 && priceDeltaPct in -0.25..0.50 => DISTRIBUTION"
                 )
                 else -> Triple(
                     "NEUTRAL",
