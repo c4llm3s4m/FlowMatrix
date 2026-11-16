@@ -78,6 +78,7 @@ data class DashboardState(
     val oiFlowRegime: OIFlowRegimeState = OIFlowRegimeState(),
     val orderFlowRegime: OrderFlowRegimeState = OrderFlowRegimeState(),
     val flowConsensus: FlowConsensusState = FlowConsensusState(),
+    val smpeUiState: SmpeUiState = SmpeUiState(),
     val candles: List<CandleOrderFlow> = emptyList(),
     val cardOrder: List<TelemetryCardType> = TelemetryCardType.DEFAULT_ORDER,
     val connectionMode: ConnectionMode = ConnectionMode.AUTO,
@@ -95,6 +96,9 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     private val tradeSnapshotBuffer = ArrayDeque<TradeSnapshot>()
     private val tradeRateWindow = ArrayDeque<Long>()
 
+    // Phase 6: Smart Money Position Engine (SMPE) Runtime Snapshot Buffer (max size 60)
+    private val smartMoneySnapshotBuffer = ArrayDeque<SmartMoneySnapshot>()
+
     // Consensus Memory Engine State
     private var memoryLastConsensus: String? = null
     private var memoryLastNarrative: String? = null
@@ -107,6 +111,10 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     private var lastPriceTickTimeMs: Long = 0L
     private var lastTradeTimeMs: Long = 0L
     private var lastRegimeTransitionTimeMs: Long = 0L
+
+    // SMPE Transition State
+    private var lastNonNeutralSmpeRegime: String? = null
+    private var smpeTransitionTimestampMs: Long? = null
 
     private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.US)
     private val millisFormatter = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
@@ -123,6 +131,10 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     val appModeState: StateFlow<AppMode> = _uiState
         .map { it.appMode }
         .stateIn(viewModelScope, SharingStarted.Eagerly, _uiState.value.appMode)
+
+    val smpeState: StateFlow<SmpeUiState> = _uiState
+        .map { it.smpeUiState }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, _uiState.value.smpeUiState)
 
     init {
         val savedMode = prefsManager.getConnectionMode()
@@ -204,6 +216,13 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    fun toggleSmpeDebugMode() {
+        _uiState.update {
+            val currentDebug = it.smpeUiState.isDebugEnabled
+            it.copy(smpeUiState = it.smpeUiState.copy(isDebugEnabled = !currentDebug))
+        }
+    }
+
     fun moveCardUp(card: TelemetryCardType) {
         val current = _uiState.value.cardOrder.toMutableList()
         val index = current.indexOf(card)
@@ -273,17 +292,45 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    // --- PHASE 5 & MEMORY ENGINE: DUAL ENGINE CONSENSUS & TRAP DETECTION ENGINE ---
+    // --- PHASE 5, 6 & MEMORY ENGINE: DUAL ENGINE CONSENSUS, TRAP DETECTION & SMPE OVERRIDE ENGINE ---
     private fun evaluateFlowConsensus(
         oiState: OIFlowRegimeState,
-        ofState: OrderFlowRegimeState
+        ofState: OrderFlowRegimeState,
+        smpeState: SmpeUiState
     ): FlowConsensusState {
         val oiRegime = oiState.regime.uppercase()
         val ofRegime = ofState.regime.uppercase()
         val oiStrength = oiState.strength.uppercase()
         val cvdConfirm = oiState.confirmation
 
+        // --- PHASE 6 (PART 2): INVENTORY VS FLOW CONFLICT DETECTOR ---
+        val inventoryIncreasing = smpeState.longCapitalDeltaPct >= 0.50 || smpeState.inventoryMomentum >= 0.75
+        val inventoryDecreasing = smpeState.longCapitalDeltaPct <= -0.50 || smpeState.inventoryMomentum <= -0.75
+        val flowBuying = ofRegime == "BUY AGGRESSION"
+        val flowSelling = ofRegime == "SELL AGGRESSION"
+
+        val (invVsFlowLabel, invVsFlowBias) = when {
+            flowSelling && inventoryIncreasing -> "PROFIT TAKING INSIDE BULLISH CAMPAIGN" to "BULLISH"
+            flowBuying && inventoryDecreasing -> "BUYING INTO DISTRIBUTION" to "BEARISH"
+            flowBuying && inventoryIncreasing -> "CONFIRMED EXPANSION" to "STRONG BULLISH"
+            flowSelling && inventoryDecreasing -> "CONFIRMED DISTRIBUTION" to "STRONG BEARISH"
+            else -> "ALIGNED / BALANCED" to "NEUTRAL"
+        }
+
+        // --- PHASE 6 (PART 2): PRIORITY HIERARCHY & CONSENSUS OVERRIDE ---
+        val isSmpeOverride = smpeState.regime == "SPONSORED_RALLY" &&
+            (oiRegime == "NEW LONGS" || oiRegime == "SHORT COVERING") &&
+            (ofRegime == "SELL AGGRESSION" && abs(ofState.deltaPercent) < 25.0)
+
         val (candidateConsensus, candidateBadgeColor, narrativeText, ruleName) = when {
+            // 1. HIGHEST-PRIORITY STRUCTURAL OVERRIDE: SMART MONEY DOMINANCE
+            isSmpeOverride -> Quadruple(
+                "SMART MONEY DOMINANCE",
+                Color(0xFF10B981),
+                "Large traders actively expanding inventory despite mild short-term sell pressure.",
+                "SMPE_OVERRIDE: SPONSORED_RALLY + BULLISH_OI => SMART_MONEY_DOMINANCE"
+            )
+
             // STATE 1: STRONG BULLISH CONTINUATION
             oiRegime == "NEW LONGS" && ofRegime == "BUY AGGRESSION" -> Quadruple(
                 "STRONG BULLISH CONTINUATION",
@@ -391,6 +438,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         if (oiStrength == "HIGH") score += 2 else if (oiStrength == "MEDIUM") score += 1
         if (ofRegime == "BUY AGGRESSION" || ofRegime == "SELL AGGRESSION") score += 2
         if (cvdConfirm == "CVD CONFIRMED") score += 2 else if (cvdConfirm == "DIVERGENCE") score -= 1
+        if (isSmpeOverride) score += 2
 
         val (confText, confColor) = when {
             score >= 4 -> "HIGH" to Color(0xFF10B981)
@@ -407,6 +455,10 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
             inputOiStrength = oiStrength,
             inputOrderFlowStrength = if (ofRegime.contains("AGGRESSION")) "HIGH" else "MEDIUM",
             inputCvdConfirmation = cvdConfirm,
+            inputSmpeRegime = smpeState.regime,
+            inputSmpeDominance = smpeState.dominance,
+            inventoryVsFlowLabel = invVsFlowLabel,
+            inventoryVsFlowBias = invVsFlowBias,
             confidenceScore = score,
             ruleFired = ruleName
         )
@@ -419,6 +471,8 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
             oiRegimeDisplay = oiRegime,
             orderFlowDisplay = ofRegime,
             narrative = narrativeText,
+            inventoryVsFlowLabel = invVsFlowLabel,
+            inventoryVsFlowBias = invVsFlowBias,
             previousConsensus = memoryLastConsensus,
             previousConsensusColor = memoryLastBadgeColor,
             previousNarrative = memoryLastNarrative,
@@ -550,7 +604,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
             debugState = debugState
         )
 
-        val consensusState = evaluateFlowConsensus(_uiState.value.oiFlowRegime, newOrderFlowState)
+        val consensusState = evaluateFlowConsensus(_uiState.value.oiFlowRegime, newOrderFlowState, _uiState.value.smpeUiState)
 
         _uiState.update {
             it.copy(
@@ -592,12 +646,15 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         snapshotBuffer.clear()
         tradeSnapshotBuffer.clear()
         tradeRateWindow.clear()
+        smartMoneySnapshotBuffer.clear()
         memoryLastConsensus = null
         memoryLastNarrative = null
         memoryLastTimestampMs = null
         memoryHistoryList.clear()
         lastValidRegime = null
         lastRegimeTransitionTimeMs = 0L
+        lastNonNeutralSmpeRegime = null
+        smpeTransitionTimestampMs = null
         val effective = detectEffectiveMode(_uiState.value.connectionMode)
         _uiState.update {
             it.copy(
@@ -610,6 +667,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 oiFlowRegime = OIFlowRegimeState(debugState = it.oiFlowRegime.debugState.copy(warnings = listOf("WARNING: Window Building"))),
                 orderFlowRegime = OrderFlowRegimeState(),
                 flowConsensus = FlowConsensusState(),
+                smpeUiState = SmpeUiState(),
                 activeMode = effective,
                 error = null
             )
@@ -907,6 +965,144 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 }
             }
 
+            // --- PHASE 6: SMART MONEY POSITION ENGINE (SMPE) DERIVATIONS & SNAPSHOT BUFFER ---
+            val oiValueStr = oi.lastOrNull()?.sumOpenInterestValue?.toDoubleOrNull()
+            val oiContracts = oi.lastOrNull()?.sumOpenInterest?.toDoubleOrNull() ?: 0.0
+            val totalNotionalOI = oiValueStr ?: (oiContracts * currentPrice)
+
+            val topPos = topPosition.lastOrNull()
+            val longAccount = topPos?.longAccount?.toDoubleOrNull() ?: 0.5
+            val shortAccount = topPos?.shortAccount?.toDoubleOrNull() ?: 0.5
+
+            val longCapital = totalNotionalOI * longAccount
+            val shortCapital = totalNotionalOI * shortAccount
+            val capitalRatio = if (shortCapital > 0.0) longCapital / shortCapital else 0.0
+            val netInventory = longCapital - shortCapital
+            val longPositionPct = longAccount * 100.0
+            val shortPositionPct = shortAccount * 100.0
+
+            if (totalNotionalOI > 0.0 && currentPrice > 0.0) {
+                smartMoneySnapshotBuffer.addLast(
+                    SmartMoneySnapshot(
+                        timestampMs = now,
+                        price = currentPrice,
+                        longCapital = longCapital,
+                        shortCapital = shortCapital,
+                        longPositionPct = longPositionPct,
+                        shortPositionPct = shortPositionPct,
+                        capitalRatio = capitalRatio
+                    )
+                )
+                while (smartMoneySnapshotBuffer.size > 60) {
+                    smartMoneySnapshotBuffer.removeFirst()
+                }
+            }
+
+            // Baseline selection: snapshot from ~60s..180s prior (or first if warming up)
+            val smpeBaseline = smartMoneySnapshotBuffer.lastOrNull { (now - it.timestampMs) in 60_000L..180_000L }
+                ?: smartMoneySnapshotBuffer.firstOrNull()
+                ?: SmartMoneySnapshot(now, currentPrice, longCapital, shortCapital, longPositionPct, shortPositionPct, capitalRatio)
+
+            val longCapitalDelta = longCapital - smpeBaseline.longCapital
+            val shortCapitalDelta = shortCapital - smpeBaseline.shortCapital
+            val longCapitalDeltaPct = if (smpeBaseline.longCapital > 0.0) ((longCapital - smpeBaseline.longCapital) / smpeBaseline.longCapital) * 100.0 else 0.0
+            val shortCapitalDeltaPct = if (smpeBaseline.shortCapital > 0.0) ((shortCapital - smpeBaseline.shortCapital) / smpeBaseline.shortCapital) * 100.0 else 0.0
+            val inventoryMomentum = longCapitalDeltaPct - shortCapitalDeltaPct
+            val positioningSpread = longPositionPct - shortPositionPct
+            val smpePriceDeltaPct = if (smpeBaseline.price > 0.0) ((currentPrice - smpeBaseline.price) / smpeBaseline.price) * 100.0 else 0.0
+
+            // Dominance Engine
+            val (dominanceText, dominanceColor) = when {
+                capitalRatio < 0.70 -> "BEAR DOMINANCE" to Color(0xFFEF4444)
+                capitalRatio <= 1.30 -> "BALANCED" to Color(0xFF9CA3AF)
+                capitalRatio <= 3.00 -> "BULL DOMINANCE" to Color(0xFF10B981)
+                capitalRatio <= 5.00 -> "STRONG BULL DOMINANCE" to Color(0xFF00C853)
+                capitalRatio <= 10.00 -> "SPONSORED RALLY" to Color(0xFF22C55E)
+                else -> "EXTREME SPONSORSHIP" to Color(0xFF00E676)
+            }
+
+            // Position Regime Classification
+            val satisfiesSmpeThreshold = smartMoneySnapshotBuffer.size >= 2 &&
+                (abs(longCapitalDeltaPct) >= 0.50 || abs(shortCapitalDeltaPct) >= 0.50)
+
+            val (smpeRegimeKey, smpeRegimeColor, smpeRuleEvaluated) = when {
+                !satisfiesSmpeThreshold -> Triple(
+                    "NEUTRAL",
+                    Color(0xFF9CA3AF),
+                    "THRESHOLD_NOT_MET (Requires >=0.5% capital delta)"
+                )
+                longCapitalDeltaPct >= 0.50 && shortCapitalDeltaPct <= -0.25 && smpePriceDeltaPct > 0.25 -> Triple(
+                    "SPONSORED_RALLY",
+                    Color(0xFF10B981),
+                    "longCapitalDeltaPct >= 0.50 && shortCapitalDeltaPct <= -0.25 && priceDeltaPct > 0.25 => SPONSORED_RALLY"
+                )
+                longCapitalDeltaPct >= 0.50 && smpePriceDeltaPct in -0.25..0.75 -> Triple(
+                    "ACCUMULATION",
+                    Color(0xFF3B82F6),
+                    "longCapitalDeltaPct >= 0.50 && priceDeltaPct in -0.25..0.75 => ACCUMULATION"
+                )
+                longCapitalDeltaPct <= -1.50 && (shortCapitalDeltaPct >= 0.50 || smpePriceDeltaPct < -0.25) -> Triple(
+                    "ABANDONMENT",
+                    Color(0xFFEF4444),
+                    "longCapitalDeltaPct <= -1.50 && (shortCapitalDeltaPct >= 0.50 || priceDeltaPct < -0.25) => ABANDONMENT"
+                )
+                longCapitalDeltaPct <= -0.50 && smpePriceDeltaPct in -0.25..0.50 -> Triple(
+                    "DISTRIBUTION",
+                    Color(0xFFF97316),
+                    "longCapitalDeltaPct <= -0.50 && priceDeltaPct in -0.25..0.50 => DISTRIBUTION"
+                )
+                else -> Triple(
+                    "NEUTRAL",
+                    Color(0xFF9CA3AF),
+                    "NO_SMPE_RULE_MATCH => NEUTRAL"
+                )
+            }
+
+            // Transition Tracking
+            if (smpeRegimeKey != "NEUTRAL" && smpeRegimeKey != lastNonNeutralSmpeRegime) {
+                lastNonNeutralSmpeRegime = smpeRegimeKey
+                smpeTransitionTimestampMs = now
+            }
+
+            val smpeTransitionLabel = when (lastNonNeutralSmpeRegime) {
+                "ACCUMULATION" -> "WHALE ACCUMULATION"
+                "SPONSORED_RALLY" -> "WHALE EXPANSION"
+                "DISTRIBUTION" -> "WHALE DISTRIBUTION"
+                "ABANDONMENT" -> "WHALE EXITING"
+                else -> null
+            }
+
+            val smpeTransitionAgeStr = if (smpeTransitionTimestampMs != null) {
+                formatAge(now - smpeTransitionTimestampMs!!)
+            } else null
+
+            val smpeUiState = SmpeUiState(
+                currentPrice = currentPrice,
+                longCapital = longCapital,
+                shortCapital = shortCapital,
+                netInventory = netInventory,
+                longPositionPct = longPositionPct,
+                shortPositionPct = shortPositionPct,
+                capitalRatio = capitalRatio,
+                longCapitalDelta = longCapitalDelta,
+                shortCapitalDelta = shortCapitalDelta,
+                longCapitalDeltaPct = longCapitalDeltaPct,
+                shortCapitalDeltaPct = shortCapitalDeltaPct,
+                inventoryMomentum = inventoryMomentum,
+                positioningSpread = positioningSpread,
+                dominance = dominanceText,
+                dominanceColor = dominanceColor,
+                regime = smpeRegimeKey,
+                regimeColor = smpeRegimeColor,
+                transitionLabel = smpeTransitionLabel,
+                transitionAgeFormatted = smpeTransitionAgeStr,
+                snapshotCount = smartMoneySnapshotBuffer.size,
+                lastPollTimestampMs = now,
+                lastHttpStatus = 200,
+                lastErrorMessage = null,
+                ruleEvaluated = smpeRuleEvaluated
+            )
+
             // Calculate initial REST depth fallback ONLY if real-time WS imbalance is not yet set
             val currentWsImbalance = _uiState.value.orderBookImbalance
             val fallbackImbalance = if (currentWsImbalance == null && depth != null && (depth.bids.isNotEmpty() || depth.asks.isNotEmpty())) {
@@ -936,7 +1132,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 "Unable to reach Binance REST API. Reconnecting WebSocket..."
             } else null
 
-            val consensusState = evaluateFlowConsensus(oiFlowRegimeState, _uiState.value.orderFlowRegime)
+            val consensusState = evaluateFlowConsensus(oiFlowRegimeState, _uiState.value.orderFlowRegime, smpeUiState)
 
             _uiState.update {
                 it.copy(
@@ -950,6 +1146,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                     orderBookImbalance = finalImbalance,
                     oiFlowRegime = oiFlowRegimeState,
                     flowConsensus = consensusState,
+                    smpeUiState = smpeUiState,
                     candles = finalKlines,
                     error = errorMessage
                 )

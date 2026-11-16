@@ -30,6 +30,16 @@ val GreenPositive = Color(0xFF00C853)
 val CoralNegative = Color(0xFFFF5252) // Brightened coral red for high contrast against dark cards
 val GoldNeutral = Color(0xFFFFB300)
 
+fun formatCompactUsdt(amount: Double): String {
+    val absAmount = abs(amount)
+    return when {
+        absAmount >= 1_000_000_000 -> String.format("$%.2fB", amount / 1_000_000_000.0)
+        absAmount >= 1_000_000 -> String.format("$%.2fM", amount / 1_000_000.0)
+        absAmount >= 1_000 -> String.format("$%.2fK", amount / 1_000.0)
+        else -> String.format("$%.2f", amount)
+    }
+}
+
 class MainActivity : ComponentActivity() {
     private val viewModel: FlowMatrixViewModel by viewModels()
 
@@ -202,7 +212,8 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                 state.cardOrder.filter {
                     it != TelemetryCardType.OI_FLOW_REGIME &&
                     it != TelemetryCardType.ORDER_FLOW_REGIME &&
-                    it != TelemetryCardType.FLOW_CONSENSUS
+                    it != TelemetryCardType.FLOW_CONSENSUS &&
+                    it != TelemetryCardType.SMART_MONEY_POSITION
                 }
             } else {
                 state.cardOrder
@@ -279,6 +290,14 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                             isLast = isLast,
                             onMoveUp = { viewModel.moveCardUp(cardType) },
                             onMoveDown = { viewModel.moveCardDown(cardType) }
+                        )
+                        TelemetryCardType.SMART_MONEY_POSITION -> SmartMoneyPositionCard(
+                            smpeState = state.smpeUiState,
+                            isFirst = isFirst,
+                            isLast = isLast,
+                            onMoveUp = { viewModel.moveCardUp(cardType) },
+                            onMoveDown = { viewModel.moveCardDown(cardType) },
+                            onToggleDebug = { viewModel.toggleSmpeDebugMode() }
                         )
                         TelemetryCardType.LOCAL_AGGRESSION -> LocalAggressionCard(
                             activeCandle = activeCandle,
@@ -400,7 +419,177 @@ fun MetricCard(
     }
 }
 
-// PHASE 5: Flow Consensus Engine Card with Memory Engine (Copilot Mode Feature)
+// PHASE 6 (PART 3): Smart Money Position Engine Card
+@Composable
+fun SmartMoneyPositionCard(
+    smpeState: SmpeUiState,
+    isFirst: Boolean,
+    isLast: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onToggleDebug: () -> Unit
+) {
+    MetricCard(
+        title = "Smart Money Position Engine",
+        isFirst = isFirst,
+        isLast = isLast,
+        onMoveUp = onMoveUp,
+        onMoveDown = onMoveDown,
+        headerExtra = {
+            Surface(
+                onClick = onToggleDebug,
+                color = if (smpeState.isDebugEnabled) MaterialTheme.colorScheme.primaryContainer else Color.Gray.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text(
+                    text = "[DEBUG]",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (smpeState.isDebugEnabled) MaterialTheme.colorScheme.onPrimaryContainer else Color.Gray,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+        }
+    ) {
+        // ROW 1: Position Regime Badge
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Position Regime", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Surface(
+                color = smpeState.regimeColor.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                val displayRegime = smpeState.regime.replace("_", " ").uppercase()
+                Text(
+                    text = displayRegime,
+                    color = smpeState.regimeColor,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+        // ROW 2: Long Inventory
+        val longDeltaColor = if (smpeState.longCapitalDeltaPct > 0) GreenPositive else if (smpeState.longCapitalDeltaPct < 0) CoralNegative else MaterialTheme.colorScheme.onSurface
+        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Long Inventory", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = "${formatCompactUsdt(smpeState.longCapital)} (${String.format("%+.2f%%", smpeState.longCapitalDeltaPct)})",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = longDeltaColor
+            )
+        }
+
+        // ROW 3: Short Inventory
+        val shortDeltaColor = if (smpeState.shortCapitalDeltaPct > 0) GreenPositive else if (smpeState.shortCapitalDeltaPct < 0) CoralNegative else MaterialTheme.colorScheme.onSurface
+        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Short Inventory", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = "${formatCompactUsdt(smpeState.shortCapital)} (${String.format("%+.2f%%", smpeState.shortCapitalDeltaPct)})",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = shortDeltaColor
+            )
+        }
+
+        // ROW 4: Dominance Ratio
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Dominance Ratio", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(String.format("%.2fx", smpeState.capitalRatio), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.width(6.dp))
+                Surface(
+                    color = smpeState.dominanceColor.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = smpeState.dominance,
+                        color = smpeState.dominanceColor,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
+
+        // ROW 5: Inventory Momentum
+        val momColor = if (smpeState.inventoryMomentum > 0) GreenPositive else if (smpeState.inventoryMomentum < 0) CoralNegative else MaterialTheme.colorScheme.onSurface
+        DataRow("Inventory Momentum", String.format("%+.2f%%", smpeState.inventoryMomentum), momColor)
+
+        // ROW 6: Position Share (L/S)
+        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Position Share (L/S)", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row {
+                Text(String.format("%.2f%%", smpeState.longPositionPct), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = GreenPositive)
+                Text(" / ", fontSize = 14.sp, color = Color.Gray)
+                Text(String.format("%.2f%%", smpeState.shortPositionPct), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CoralNegative)
+            }
+        }
+
+        // ROW 7: Transition
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Transition", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (smpeState.transitionAgeFormatted != null) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("(${smpeState.transitionAgeFormatted})", fontSize = 11.sp, color = Color.Gray)
+                }
+            }
+            Text(
+                text = smpeState.transitionLabel ?: "NONE",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (smpeState.transitionLabel != null) MaterialTheme.colorScheme.primary else Color.Gray
+            )
+        }
+
+        // --- COLLAPSIBLE DIAGNOSTICS / DEBUG DRAWER ---
+        if (smpeState.isDebugEnabled) {
+            Spacer(modifier = Modifier.height(8.dp))
+            HorizontalDivider(color = GoldNeutral.copy(alpha = 0.4f))
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("🛠 SMPE ENGINE DIAGNOSTICS", fontSize = 11.sp, fontWeight = FontWeight.Black, color = GoldNeutral)
+
+                DebugHeader("SYSTEM & BUFFER")
+                DebugRow("Snapshot Count", "${smpeState.snapshotCount}")
+                DebugRow("Buffer Status", if (smpeState.snapshotCount >= 2) "READY" else "BUILDING", if (smpeState.snapshotCount >= 2) GreenPositive else Color.Gray)
+                val pollAge = if (smpeState.lastPollTimestampMs > 0) System.currentTimeMillis() - smpeState.lastPollTimestampMs else 0L
+                DebugRow("Last Poll Age", "$pollAge ms")
+                DebugRow("HTTP Status", "${smpeState.lastHttpStatus}")
+
+                DebugHeader("INVENTORY CALCULATIONS")
+                DebugRow("Net Inventory", formatCompactUsdt(smpeState.netInventory))
+                DebugRow("Position Share Spread", String.format("%+.2f%%", smpeState.positioningSpread))
+                DebugRow("Long Capital Delta", formatCompactUsdt(smpeState.longCapitalDelta))
+                DebugRow("Short Capital Delta", formatCompactUsdt(smpeState.shortCapitalDelta))
+
+                DebugHeader("REGIME & THRESHOLD TRACE")
+                DebugRow("Rule Evaluated", smpeState.ruleEvaluated)
+                DebugRow("Transition Age", smpeState.transitionAgeFormatted ?: "--")
+            }
+        }
+    }
+}
+
+// PHASE 5 & 6: Flow Consensus Engine Card with Memory Engine & Inventory vs Flow Detector
 @Composable
 fun FlowConsensusCard(
     consensusState: FlowConsensusState,
@@ -484,7 +673,35 @@ fun FlowConsensusCard(
         // ROW 4: Order Flow Display
         DataRow("Order Flow", consensusState.orderFlowDisplay)
 
-        // ROW 5: Narrative Text Explanation
+        // ROW 5: Inventory vs Flow Conflict Detector Row
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Inventory vs Flow", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val biasColor = when (consensusState.inventoryVsFlowBias) {
+                "STRONG BULLISH" -> GreenPositive
+                "BULLISH" -> Color(0xFF10B981)
+                "BEARISH" -> Color(0xFFF97316)
+                "STRONG BEARISH" -> CoralNegative
+                else -> GoldNeutral
+            }
+            Surface(
+                color = biasColor.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(
+                    text = consensusState.inventoryVsFlowLabel,
+                    color = biasColor,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+            }
+        }
+
+        // ROW 6: Narrative Text Explanation
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -502,7 +719,7 @@ fun FlowConsensusCard(
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
 
-        // ROW 6: Last Consensus (Consensus Memory Engine)
+        // ROW 7: Last Consensus (Consensus Memory Engine)
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -531,7 +748,7 @@ fun FlowConsensusCard(
             }
         }
 
-        // ROW 7: Last Narrative
+        // ROW 8: Last Narrative
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -562,6 +779,9 @@ fun FlowConsensusCard(
                 DebugRow("Input OI Strength", debug.inputOiStrength)
                 DebugRow("Input Order Flow Strength", debug.inputOrderFlowStrength)
                 DebugRow("CVD Confirmation", debug.inputCvdConfirmation ?: "NONE")
+                DebugRow("Input SMPE Regime", debug.inputSmpeRegime)
+                DebugRow("Input SMPE Dominance", debug.inputSmpeDominance)
+                DebugRow("Inventory vs Flow Bias", debug.inventoryVsFlowBias)
 
                 DebugHeader("CONFIDENCE ENGINE")
                 DebugRow("Confidence Score", "${debug.confidenceScore}")

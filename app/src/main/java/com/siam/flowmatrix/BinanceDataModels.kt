@@ -105,12 +105,13 @@ data class PositioningMatrix(
         }
 }
 
-// 6. Dashboard Telemetry Card Types for Custom Ordering & Persistence (10 Cards Total)
+// 6. Dashboard Telemetry Card Types for Custom Ordering & Persistence (11 Cards Total)
 enum class TelemetryCardType(val id: String, val title: String) {
     INITIAL_PULSE("INITIAL_PULSE", "Initial Candle Volume Delta"),
     ORDER_BOOK_IMBALANCE("ORDER_BOOK_IMBALANCE", "Order Book Imbalance"),
     POSITIONING_MATRIX("POSITIONING_MATRIX", "Multi-Tier Positioning & Smart Money"),
     POSITIONING_RATIO("POSITIONING_RATIO", "Positioning Ratio"),
+    SMART_MONEY_POSITION("SMART_MONEY_POSITION", "Smart Money Position Engine"),
     LOCAL_AGGRESSION("LOCAL_AGGRESSION", "Local Aggression"),
     OPEN_INTEREST("OPEN_INTEREST", "Open Interest"),
     OI_FLOW_REGIME("OI_FLOW_REGIME", "OI Flow Regime (Live Delta)"),
@@ -124,6 +125,7 @@ enum class TelemetryCardType(val id: String, val title: String) {
             ORDER_BOOK_IMBALANCE,
             POSITIONING_MATRIX,
             POSITIONING_RATIO,
+            SMART_MONEY_POSITION,
             LOCAL_AGGRESSION,
             OPEN_INTEREST,
             OI_FLOW_REGIME,
@@ -294,11 +296,15 @@ data class FlowConsensusDebugState(
     val inputOiStrength: String = "LOW",
     val inputOrderFlowStrength: String = "LOW",
     val inputCvdConfirmation: String? = null,
+    val inputSmpeRegime: String = "NEUTRAL",
+    val inputSmpeDominance: String = "BALANCED",
+    val inventoryVsFlowLabel: String = "ALIGNED / BALANCED",
+    val inventoryVsFlowBias: String = "NEUTRAL",
     val confidenceScore: Int = 0,
     val ruleFired: String = "No rule fired (NEUTRAL)"
 )
 
-// 17. Flow Consensus State Model (Dual Engine Consensus & Memory Engine)
+// 17. Flow Consensus State Model (Dual Engine Consensus, Memory & SMPE Layer)
 data class FlowConsensusState(
     val consensus: String = "NEUTRAL",
     val badgeColor: Color = Color(0xFF9CA3AF),
@@ -307,12 +313,54 @@ data class FlowConsensusState(
     val oiRegimeDisplay: String = "NEUTRAL",
     val orderFlowDisplay: String = "BALANCED FLOW",
     val narrative: String = "No dominant market narrative detected.",
+    val inventoryVsFlowLabel: String = "ALIGNED / BALANCED",
+    val inventoryVsFlowBias: String = "NEUTRAL",
     val previousConsensus: String? = null,
     val previousConsensusColor: Color = Color(0xFF9CA3AF),
     val previousNarrative: String? = null,
     val previousConsensusAgeFormatted: String? = null,
     val consensusHistory: List<ConsensusHistoryEvent> = emptyList(),
     val debugState: FlowConsensusDebugState = FlowConsensusDebugState()
+)
+
+// 18. Smart Money Position Snapshot (Phase 6: SMPE Engine)
+data class SmartMoneySnapshot(
+    val timestampMs: Long,
+    val price: Double,
+    val longCapital: Double,
+    val shortCapital: Double,
+    val longPositionPct: Double,
+    val shortPositionPct: Double,
+    val capitalRatio: Double
+)
+
+// 19. Smart Money Position Engine (SMPE) State Model (Phase 6)
+data class SmpeUiState(
+    val isDebugEnabled: Boolean = false,
+    val currentPrice: Double = 0.0,
+    val longCapital: Double = 0.0,
+    val shortCapital: Double = 0.0,
+    val netInventory: Double = 0.0,
+    val longPositionPct: Double = 0.0,
+    val shortPositionPct: Double = 0.0,
+    val capitalRatio: Double = 0.0,
+    val longCapitalDelta: Double = 0.0,
+    val shortCapitalDelta: Double = 0.0,
+    val longCapitalDeltaPct: Double = 0.0,
+    val shortCapitalDeltaPct: Double = 0.0,
+    val inventoryMomentum: Double = 0.0,
+    val positioningSpread: Double = 0.0,
+    val dominance: String = "BALANCED",
+    val dominanceColor: Color = Color(0xFF9CA3AF),
+    val regime: String = "NEUTRAL",
+    val regimeColor: Color = Color(0xFF9CA3AF),
+    val transitionLabel: String? = null,
+    val transitionAgeFormatted: String? = null,
+    val snapshotCount: Int = 0,
+    val lastPollTimestampMs: Long = 0L,
+    val lastHttpStatus: Int = 200,
+    val lastErrorMessage: String? = null,
+    val ruleEvaluated: String = "NO_RULE_MATCH => NEUTRAL"
 )
 
 // The math engine to calculate candle-specific aggression (Dip vs Dump)
