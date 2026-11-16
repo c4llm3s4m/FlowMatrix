@@ -656,7 +656,13 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
         lastNonNeutralSmpeRegime = null
         smpeTransitionTimestampMs = null
         val effective = detectEffectiveMode(_uiState.value.connectionMode)
+
         _uiState.update {
+            val currentOiDebug = it.oiFlowRegime.debugState.isDebugEnabled
+            val currentOfDebug = it.orderFlowRegime.debugState.isDebugEnabled
+            val currentFcDebug = it.flowConsensus.debugState.isDebugEnabled
+            val currentSmpeDebug = it.smpeUiState.isDebugEnabled
+
             it.copy(
                 symbol = symbol,
                 interval = interval,
@@ -664,10 +670,10 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 liveCandle = null,
                 initialDeltaSign = InitialDeltaSign.WAITING,
                 orderBookImbalance = null,
-                oiFlowRegime = OIFlowRegimeState(debugState = it.oiFlowRegime.debugState.copy(warnings = listOf("WARNING: Window Building"))),
-                orderFlowRegime = OrderFlowRegimeState(),
-                flowConsensus = FlowConsensusState(),
-                smpeUiState = SmpeUiState(),
+                oiFlowRegime = OIFlowRegimeState(debugState = OiFlowRegimeDebugState(isDebugEnabled = currentOiDebug, warnings = listOf("WARNING: Window Building"))),
+                orderFlowRegime = OrderFlowRegimeState(debugState = OrderFlowRegimeDebugState(isDebugEnabled = currentOfDebug)),
+                flowConsensus = FlowConsensusState(debugState = FlowConsensusDebugState(isDebugEnabled = currentFcDebug)),
+                smpeUiState = SmpeUiState(isDebugEnabled = currentSmpeDebug),
                 activeMode = effective,
                 error = null
             )
@@ -1052,7 +1058,7 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 longCapitalDeltaPct <= -0.60 && (shortCapitalDeltaPct >= 0.20 || smpePriceDeltaPct < -0.20) -> Triple(
                     "ABANDONMENT",
                     Color(0xFFEF4444),
-                    "longCapitalDeltaPct <= -0.60 && (shortCapitalDeltaPct >= 0.20 || priceDeltaPct < -0.20) => ABANDONMENT"
+                    "longCapitalDeltaPct <= -0.60 && (shortCapitalDeltaPct >= 0.20 || smpePriceDeltaPct < -0.20) => ABANDONMENT"
                 )
                 longCapitalDeltaPct <= -0.20 && smpePriceDeltaPct in -0.25..0.50 -> Triple(
                     "DISTRIBUTION",
@@ -1084,7 +1090,10 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
                 formatAge(now - smpeTransitionTimestampMs!!)
             } else null
 
+            val isSmpeDebugActive = _uiState.value.smpeUiState.isDebugEnabled
+
             val smpeUiState = SmpeUiState(
+                isDebugEnabled = isSmpeDebugActive,
                 currentPrice = currentPrice,
                 longCapital = longCapital,
                 shortCapital = shortCapital,
