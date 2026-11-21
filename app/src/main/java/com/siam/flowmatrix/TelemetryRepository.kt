@@ -285,12 +285,12 @@ object TelemetryRepository {
         val oiStrength = oiState.strength.uppercase()
         val cvdConfirm = oiState.confirmation
 
-        // --- PHASE 6: INVENTORY VS FLOW CONFLICT DETECTOR (TUNED 0.20% THRESHOLD) ---
-        val inventoryIncreasing = smpeState.longCapitalDeltaPct >= 0.20 || smpeState.inventoryMomentum >= 0.30
-        val inventoryDecreasing = smpeState.longCapitalDeltaPct <= -0.20 || smpeState.inventoryMomentum <= -0.30
+        // --- INVENTORY VS FLOW CONFLICT DETECTOR (BUG FIX 2: SYNCHRONIZED BOOLEANS) ---
+        val inventoryIncreasing = smpeState.regime in listOf("ACCUMULATION", "SPONSORED_RALLY") || smpeState.longCapitalDeltaPct >= 0.50
+        val inventoryDecreasing = smpeState.regime in listOf("DISTRIBUTION", "ABANDONMENT") || smpeState.longCapitalDeltaPct <= -0.50
 
-        val flowBuying = ofRegime == "EXPANSIVE BUYING" || ofRegime == "BID ABSORPTION" || ofRegime == "SHORT TRAP" || ofRegime == "THIN-ASK DRIFT" || ofRegime == "BUY AGGRESSION"
-        val flowSelling = ofRegime == "EXPANSIVE SELLING" || ofRegime == "ASK ABSORPTION" || ofRegime == "LONG TRAP" || ofRegime == "THIN-BID DROP" || ofRegime == "SELL AGGRESSION"
+        val flowBuying = ofRegime in listOf("EXPANSIVE BUYING", "THIN-ASK DRIFT", "BID ABSORPTION", "SHORT TRAP", "BUY AGGRESSION")
+        val flowSelling = ofRegime in listOf("EXPANSIVE SELLING", "THIN-BID DROP", "ASK ABSORPTION", "LONG TRAP", "SELL AGGRESSION")
 
         val (invVsFlowLabel, invVsFlowBias) = when {
             flowSelling && inventoryIncreasing -> "PROFIT TAKING INSIDE BULLISH CAMPAIGN" to "BULLISH"
@@ -339,12 +339,11 @@ object TelemetryRepository {
             )
         }
 
-        // --- PHASE 6: PRIORITY HIERARCHY & CONSENSUS OVERRIDE ---
+        // --- PRIORITY HIERARCHY & CONSENSUS OVERRIDES ---
         val isSmpeOverride = smpeState.regime == "SPONSORED_RALLY" &&
             (oiRegime == "NEW LONGS" || oiRegime == "SHORT COVERING") &&
             ((ofRegime == "EXPANSIVE SELLING" || ofRegime == "SELL AGGRESSION") && abs(ofState.deltaPercent) < 25.0)
 
-        // EXPLICIT WYCKOFF ABSORPTION RULES
         val isBullishAbsorptionTrap = (ofRegime == "BID ABSORPTION" || ofRegime == "SHORT TRAP") && oiRegime == "NEW SHORTS"
         val isBearishDistributionWall = (ofRegime == "ASK ABSORPTION" || ofRegime == "LONG TRAP") && (oiRegime == "NEW LONGS" || smpeState.regime == "DISTRIBUTION")
 
@@ -357,7 +356,22 @@ object TelemetryRepository {
                 "SMPE_OVERRIDE: SPONSORED_RALLY + BULLISH_OI => SMART_MONEY_DOMINANCE"
             )
 
-            // 2. EXPLICIT WYCKOFF ABSORPTION RULES
+            // 2. EXPLICIT V3 INTENT OVERRIDES: SHORT SQUEEZE & LONG LIQUIDATION CASCADE
+            intentKey == "SHORT SQUEEZE" -> Quadruple(
+                "SHORT SQUEEZE",
+                Color(0xFF22C55E),
+                "Forced short covering into thin overhead asks.",
+                "INTENT_RULE: SHORT_SQUEEZE"
+            )
+
+            intentKey == "LONG LIQUIDATION" -> Quadruple(
+                "LONG LIQUIDATION CASCADE",
+                Color(0xFFEF4444),
+                "Forced long liquidations into pulled bid liquidity.",
+                "INTENT_RULE: LONG_LIQUIDATION_CASCADE"
+            )
+
+            // 3. EXPLICIT WYCKOFF ABSORPTION RULES
             isBullishAbsorptionTrap -> Quadruple(
                 "BULLISH ABSORPTION TRAP",
                 Color(0xFF00C853),
@@ -373,51 +387,51 @@ object TelemetryRepository {
             )
 
             // STATE 1: STRONG BULLISH CONTINUATION
-            oiRegime == "NEW LONGS" && (ofRegime == "EXPANSIVE BUYING" || ofRegime == "BUY AGGRESSION") -> Quadruple(
+            oiRegime == "NEW LONGS" && flowBuying -> Quadruple(
                 "STRONG BULLISH CONTINUATION",
                 Color(0xFF10B981),
                 "Fresh longs entering while buyers control short-term order flow.",
-                "NEW_LONGS + EXPANSIVE_BUYING => STRONG_BULLISH_CONTINUATION"
+                "NEW_LONGS + BUY_FLOW => STRONG_BULLISH_CONTINUATION"
             )
 
             // STATE 2: STRONG BEARISH CONTINUATION
-            oiRegime == "NEW SHORTS" && (ofRegime == "EXPANSIVE SELLING" || ofRegime == "SELL AGGRESSION") -> Quadruple(
+            oiRegime == "NEW SHORTS" && flowSelling -> Quadruple(
                 "STRONG BEARISH CONTINUATION",
                 Color(0xFFEF4444),
                 "Fresh shorts entering while sellers control short-term order flow.",
-                "NEW_SHORTS + EXPANSIVE_SELLING => STRONG_BEARISH_CONTINUATION"
+                "NEW_SHORTS + SELL_FLOW => STRONG_BEARISH_CONTINUATION"
             )
 
             // STATE 3: SHORT TRAP
-            oiRegime == "NEW SHORTS" && (ofRegime == "EXPANSIVE BUYING" || ofRegime == "BUY AGGRESSION") -> Quadruple(
+            oiRegime == "NEW SHORTS" && flowBuying -> Quadruple(
                 "SHORT TRAP",
                 Color(0xFFF59E0B),
                 "New shorts entering while buyers absorb and push price higher. Potential squeeze risk.",
-                "NEW_SHORTS + EXPANSIVE_BUYING => SHORT_TRAP"
+                "NEW_SHORTS + BUY_FLOW => SHORT_TRAP"
             )
 
             // STATE 4: LONG TRAP
-            oiRegime == "NEW LONGS" && (ofRegime == "EXPANSIVE SELLING" || ofRegime == "SELL AGGRESSION") -> Quadruple(
+            oiRegime == "NEW LONGS" && flowSelling -> Quadruple(
                 "LONG TRAP",
                 Color(0xFFF97316),
                 "New longs entering while sellers control aggressive flow. Potential downside trap.",
-                "NEW_LONGS + EXPANSIVE_SELLING => LONG_TRAP"
+                "NEW_LONGS + SELL_FLOW => LONG_TRAP"
             )
 
             // STATE 5: CAPITULATION REVERSAL
-            oiRegime == "LONG LIQUIDATIONS" && (ofRegime == "EXPANSIVE BUYING" || ofRegime == "BID ABSORPTION" || ofRegime == "BUY AGGRESSION") -> Quadruple(
+            oiRegime == "LONG LIQUIDATIONS" && flowBuying -> Quadruple(
                 "CAPITULATION REVERSAL",
                 Color(0xFFEAB308),
                 "Long liquidation event followed by aggressive buying pressure. Potential local bottom.",
-                "LONG_LIQUIDATIONS + BUY_EFFORT => CAPITULATION_REVERSAL"
+                "LONG_LIQUIDATIONS + BUY_FLOW => CAPITULATION_REVERSAL"
             )
 
             // STATE 6: SHORT SQUEEZE
-            oiRegime == "SHORT COVERING" && (ofRegime == "EXPANSIVE BUYING" || ofRegime == "BUY AGGRESSION") -> Quadruple(
+            oiRegime == "SHORT COVERING" && flowBuying -> Quadruple(
                 "SHORT SQUEEZE",
                 Color(0xFF22C55E),
                 "Shorts exiting while buyers continue lifting offers. Potential squeeze continuation.",
-                "SHORT_COVERING + EXPANSIVE_BUYING => SHORT_SQUEEZE"
+                "SHORT_COVERING + BUY_FLOW => SHORT_SQUEEZE"
             )
 
             // STATE 7: DISTRIBUTION
@@ -518,6 +532,18 @@ object TelemetryRepository {
             else -> "LOW" to Color(0xFF9CA3AF)
         }
 
+        // ALIGNMENT RULE: Never output Consensus = NEUTRAL when intentState != "NEUTRAL AUCTION" and confidencePct >= 60
+        val (finalConsensus, finalColor, finalNarrative, finalRule) = if (candidateConsensus == "NEUTRAL" && intentKey != "NEUTRAL AUCTION" && confidencePct >= 60) {
+            Quadruple(
+                intentKey,
+                intentColor,
+                intentDesc,
+                "INTENT_OVERRIDE: $intentKey (Confidence $confidencePct%)"
+            )
+        } else {
+            Quadruple(candidateConsensus, candidateBadgeColor, narrativeText, ruleName)
+        }
+
         val isDebugActive = _uiState.value.flowConsensus.debugState.isDebugEnabled
 
         val debugState = FlowConsensusDebugState(
@@ -537,18 +563,18 @@ object TelemetryRepository {
             persistenceScore = persistenceScore,
             totalConfidencePct = confidencePct,
             intentRuleFired = intentKey,
-            ruleFired = ruleName
+            ruleFired = finalRule
         )
 
         return FlowConsensusState(
-            consensus = candidateConsensus,
-            badgeColor = candidateBadgeColor,
+            consensus = finalConsensus,
+            badgeColor = finalColor,
             confidencePct = confidencePct,
             confidence = confText,
             confidenceColor = confColor,
             oiRegimeDisplay = oiRegime,
             orderFlowDisplay = ofRegime,
-            narrative = narrativeText,
+            narrative = finalNarrative,
             inventoryVsFlowLabel = invVsFlowLabel,
             inventoryVsFlowBias = invVsFlowBias,
             intentState = intentKey,
