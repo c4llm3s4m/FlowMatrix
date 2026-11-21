@@ -881,7 +881,7 @@ fun SmartMoneyPositionCard(
     }
 }
 
-// V3 Flow Consensus Engine Card with Memory Engine, Inventory vs Flow & Intent Engine
+// V3.5 Flow Consensus Engine Card with Memory Engine, Intent Engine & Mechanics/Trade Bias
 @Composable
 fun FlowConsensusCard(
     consensusState: FlowConsensusState,
@@ -936,9 +936,29 @@ fun FlowConsensusCard(
             }
         }
 
+        // ROW 2: Compact Bias Row (Mechanics Bias • Trade Conviction)
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Bias", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val mechanicsColor = when (consensusState.mechanicsBias) {
+                "BULLISH" -> GreenPositive
+                "BEARISH" -> CoralNegative
+                else -> GoldNeutral
+            }
+            Text(
+                text = "${consensusState.mechanicsBias} • ${consensusState.tradeBias} CONVICTION",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = mechanicsColor
+            )
+        }
+
         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-        // ROW 2: Confidence Badge (Unified 0-100% Score Display)
+        // ROW 3: Confidence Badge (Unified 0-100% Score Display)
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -959,13 +979,13 @@ fun FlowConsensusCard(
             }
         }
 
-        // ROW 3: OI Regime Display
+        // ROW 4: OI Regime Display
         DataRow("OI Regime", consensusState.oiRegimeDisplay)
 
-        // ROW 4: Order Flow Display
+        // ROW 5: Order Flow Display
         DataRow("Order Flow", consensusState.orderFlowDisplay)
 
-        // ROW 5: Inventory vs Flow Conflict Detector Row
+        // ROW 6: Inventory vs Flow Conflict Detector Row
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -993,7 +1013,7 @@ fun FlowConsensusCard(
             }
         }
 
-        // ROW 6: Intent Row (OI + Order Flow Intent Engine)
+        // ROW 7: Intent Row (OI + Order Flow Intent Engine)
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1021,7 +1041,7 @@ fun FlowConsensusCard(
             modifier = Modifier.padding(bottom = 4.dp)
         )
 
-        // ROW 7: Narrative Text Explanation
+        // ROW 8: Narrative Text Explanation
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1039,7 +1059,7 @@ fun FlowConsensusCard(
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
 
-        // ROW 8: Last Consensus (Consensus Memory Engine)
+        // ROW 9: Last Consensus (Consensus Memory Engine)
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1068,7 +1088,7 @@ fun FlowConsensusCard(
             }
         }
 
-        // ROW 9: Last Narrative
+        // ROW 10: Last Narrative
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1106,9 +1126,14 @@ fun FlowConsensusCard(
                 DebugHeader("CONFIDENCE ENGINE BREAKDOWN (0-100%)")
                 DebugRow("SMPE Score (/30)", "${debug.smpeScore}")
                 DebugRow("OI Score (/25)", "${debug.oiScore}")
-                DebugRow("Order Flow Score (/25)", "${debug.ofScore}")
-                DebugRow("Persistence Score (/20)", "${debug.persistenceScore}")
+                DebugRow("Order Flow Score (/20)", "${debug.ofScore}")
+                DebugRow("Momentum Score (/15)", "${debug.momentumScore}")
+                DebugRow("Persistence Score (/10)", "${debug.persistenceScore}")
                 DebugRow("Total Confidence", "${debug.totalConfidencePct}% [${consensusState.confidence}]", consensusState.confidenceColor)
+
+                DebugHeader("MECHANICS & TRADE BIAS")
+                DebugRow("Mechanics Bias", debug.mechanicsBias)
+                DebugRow("Trade Bias", debug.tradeBias)
 
                 DebugHeader("INTENT ENGINE TRACE")
                 DebugRow("Intent State", consensusState.intentState, consensusState.intentColor)

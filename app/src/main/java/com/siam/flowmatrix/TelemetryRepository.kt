@@ -286,7 +286,7 @@ object TelemetryRepository {
         }
     }
 
-    // --- V3 FLOW CONSENSUS ENGINE: INTENT ENGINE, UNIFIED 0-100% CONFIDENCE & SMPE OVERRIDES ---
+    // --- V3.5 FLOW CONSENSUS ENGINE: INTENT ENGINE, MECHANICS/TRADE BIAS & UNIFIED 0-100% CONFIDENCE ---
     private fun evaluateFlowConsensus(
         oiState: OIFlowRegimeState,
         ofState: OrderFlowRegimeState,
@@ -497,51 +497,80 @@ object TelemetryRepository {
 
         val prevAgeStr = if (memoryLastTimestampMs != null) formatAge(now - memoryLastTimestampMs!!) else null
 
-        // --- V3 UNIFIED CONFIDENCE ENGINE (0-100%, SMPE-PRIORITY WEIGHTING) ---
-        // 1. SMPE Score (up to 30 pts)
+        // --- V3.5 MECHANICS BIAS CLASSIFICATION ---
+        val mechanicsBiasStr = when {
+            intentKey in listOf("SHORT SQUEEZE", "BEAR TRAP FORMING", "INITIATIVE BUYING") ||
+            candidateConsensus in listOf("STRONG BULLISH CONTINUATION", "SHORT SQUEEZE", "CAPITULATION REVERSAL", "SHORT TRAP", "BULLISH ABSORPTION TRAP", "ACCUMULATION", "SMART MONEY DOMINANCE") ||
+            flowBuying -> "BULLISH"
+
+            intentKey in listOf("LONG LIQUIDATION", "BULL TRAP FORMING", "INITIATIVE SHORTING") ||
+            candidateConsensus in listOf("STRONG BEARISH CONTINUATION", "LONG LIQUIDATION CASCADE", "LONG TRAP", "BEARISH DISTRIBUTION WALL", "DISTRIBUTION") ||
+            flowSelling -> "BEARISH"
+
+            else -> "NEUTRAL"
+        }
+
+        // --- V3.5 REBALANCED 5-PART CONFIDENCE ENGINE (0-100%, SMPE PRIORITY) ---
+        // 1. SMPE Confirmation (up to 30 pts)
         val smpeScore = when {
+            invVsFlowLabel == "BUYING INTO DISTRIBUTION" || invVsFlowLabel == "SELLING INTO ACCUMULATION" -> 5 // Deduct -10 on direct whale conflict
             smpeState.regime in listOf("SPONSORED_RALLY", "ACCUMULATION", "DISTRIBUTION", "ABANDONMENT") -> {
                 val isSmpeBullish = smpeState.regime in listOf("SPONSORED_RALLY", "ACCUMULATION")
-                if ((isSmpeBullish && flowBuying) || (!isSmpeBullish && flowSelling)) 30 else 15
+                if ((isSmpeBullish && mechanicsBiasStr == "BULLISH") || (!isSmpeBullish && mechanicsBiasStr == "BEARISH")) 30 else 15
             }
             smpeState.dominance in listOf("BULL DOMINANCE", "BEAR DOMINANCE", "STRONG BULL DOMINANCE", "SPONSORED RALLY", "EXTREME SPONSORSHIP") -> 20
             else -> 10
         }
 
-        // 2. OI Regime Score (up to 25 pts)
+        // 2. OI Confirmation (up to 25 pts)
         val oiScore = when {
             oiRegime in listOf("NEW LONGS", "NEW SHORTS", "SHORT COVERING", "LONG LIQUIDATIONS") -> {
                 val isOiBullish = oiRegime in listOf("NEW LONGS", "SHORT COVERING")
-                if ((isOiBullish && flowBuying) || (!isOiBullish && flowSelling)) 25 else 15
+                if ((isOiBullish && mechanicsBiasStr == "BULLISH") || (!isOiBullish && mechanicsBiasStr == "BEARISH")) 25 else 15
             }
+            oiRegime in listOf("SHORT CLOSING", "LONG CLOSING") -> 12 // Half weight for voluntary closing
             oiRegime == "NEUTRAL" -> 10
             else -> 5
         }
 
-        // 3. Order Flow Quality Score (up to 25 pts)
+        // 3. Order Flow Quality (up to 20 pts)
         val ofScore = when {
-            ofRegime in listOf("EXPANSIVE BUYING", "EXPANSIVE SELLING", "LONG TRAP", "SHORT TRAP") -> 25
-            ofRegime in listOf("BID ABSORPTION", "ASK ABSORPTION") || ofState.defenseState != "NONE" -> 20
-            ofRegime in listOf("THIN-ASK DRIFT", "THIN-BID DROP") -> 15
+            ofRegime in listOf("EXPANSIVE BUYING", "EXPANSIVE SELLING", "LONG TRAP", "SHORT TRAP") || ofState.efficiencyBias == "INVERTED" -> 20
+            ofRegime in listOf("BID ABSORPTION", "ASK ABSORPTION") || ofState.defenseState != "NONE" -> 18
+            ofRegime in listOf("THIN-ASK DRIFT", "THIN-BID DROP") -> 14
             else -> 10
         }
 
-        // 4. Persistence Strength Score (up to 20 pts)
-        val basePersistenceScore = when {
-            ofState.persistenceCount >= 6 -> 20
-            ofState.persistenceCount in 4..5 -> 15
-            ofState.persistenceCount in 2..3 -> 10
-            else -> 4
+        // 4. Regime Momentum (up to 15 pts)
+        val momentumScore = when {
+            ofState.regimeMomentum.contains("STRENGTHENING") -> 15
+            ofState.regimeMomentum.contains("STABLE") -> 8
+            ofState.regimeMomentum.contains("WEAKENING") -> 3
+            ofState.regimeMomentum.contains("EXHAUSTING") -> 0
+            else -> 8
         }
-        val persistencePenalty = if (ofState.persistenceState == "EXHAUSTING") 8 else 0
-        val persistenceScore = kotlin.math.max(0, basePersistenceScore - persistencePenalty)
 
-        val confidencePct = (smpeScore + oiScore + ofScore + persistenceScore).coerceIn(0, 100)
+        // 5. Persistence Strength (up to 10 pts)
+        val persistenceScore = when {
+            ofState.persistenceCount >= 6 -> 10
+            ofState.persistenceCount in 4..5 -> 8
+            ofState.persistenceCount in 2..3 -> 5
+            else -> 2
+        }
+
+        val confidencePct = (smpeScore + oiScore + ofScore + momentumScore + persistenceScore).coerceIn(0, 100)
 
         val (confText, confColor) = when {
             confidencePct >= 75 -> "HIGH" to Color(0xFF10B981)
             confidencePct >= 45 -> "MEDIUM" to Color(0xFFEAB308)
             else -> "LOW" to Color(0xFF9CA3AF)
+        }
+
+        // V3.5 TRADE BIAS CLASSIFICATION
+        val tradeBiasStr = when {
+            invVsFlowLabel == "BUYING INTO DISTRIBUTION" || invVsFlowLabel == "SELLING INTO ACCUMULATION" || confidencePct < 50 -> "LOW"
+            confidencePct >= 75 && ((mechanicsBiasStr == "BULLISH" && smpeState.regime in listOf("SPONSORED_RALLY", "ACCUMULATION", "NEUTRAL")) || (mechanicsBiasStr == "BEARISH" && smpeState.regime in listOf("DISTRIBUTION", "ABANDONMENT", "NEUTRAL"))) && !ofState.regimeMomentum.contains("EXHAUSTING") -> "HIGH"
+            else -> "MEDIUM"
         }
 
         // ALIGNMENT RULE: Never output Consensus = NEUTRAL when intentState != "NEUTRAL AUCTION" and confidencePct >= 60
@@ -572,8 +601,11 @@ object TelemetryRepository {
             smpeScore = smpeScore,
             oiScore = oiScore,
             ofScore = ofScore,
+            momentumScore = momentumScore,
             persistenceScore = persistenceScore,
             totalConfidencePct = confidencePct,
+            mechanicsBias = mechanicsBiasStr,
+            tradeBias = tradeBiasStr,
             intentRuleFired = intentKey,
             ruleFired = finalRule
         )
@@ -584,6 +616,8 @@ object TelemetryRepository {
             confidencePct = confidencePct,
             confidence = confText,
             confidenceColor = confColor,
+            mechanicsBias = mechanicsBiasStr,
+            tradeBias = tradeBiasStr,
             oiRegimeDisplay = oiRegime,
             orderFlowDisplay = ofRegime,
             narrative = finalNarrative,
@@ -1449,7 +1483,7 @@ object TelemetryRepository {
                 longCapitalDeltaPct <= -0.60 && (shortCapitalDeltaPct >= 0.20 || smpePriceDeltaPct < -0.20) -> Triple(
                     "ABANDONMENT",
                     Color(0xFFEF4444),
-                    "longCapitalDeltaPct <= -0.60 && (shortCapitalDeltaPct >= 0.20 || smpePriceDeltaPct < -0.20) => ABANDONMENT"
+                    "longCapitalDeltaPct <= -0.60 && (shortCapitalDeltaPct >= 0.20 || priceDeltaPct < -0.20) => ABANDONMENT"
                 )
                 longCapitalDeltaPct <= -0.20 && smpePriceDeltaPct in -0.25..0.50 -> Triple(
                     "DISTRIBUTION",
