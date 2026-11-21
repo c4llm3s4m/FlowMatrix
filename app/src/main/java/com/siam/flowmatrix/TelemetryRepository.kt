@@ -43,6 +43,24 @@ object TelemetryRepository {
     private val tradeRateWindow = ArrayDeque<Long>()
     private val smartMoneySnapshotBuffer = ArrayDeque<SmartMoneySnapshot>()
 
+    // Wyckoff Effort vs Result Rolling Window Volume Buffer (max size 20)
+    private val volumeHistoryBuffer = ArrayDeque<Double>()
+
+    // Order Flow V3: Independent Per-Timeframe Window-Commit Memory Buffers (max size 10)
+    private val tfWindowBuffers = mapOf(
+        "1m" to ArrayDeque<OrderFlowSnapshot>(),
+        "5m" to ArrayDeque<OrderFlowSnapshot>(),
+        "15m" to ArrayDeque<OrderFlowSnapshot>(),
+        "1h" to ArrayDeque<OrderFlowSnapshot>()
+    )
+
+    private val tfLastCommitMs = mutableMapOf(
+        "1m" to 0L,
+        "5m" to 0L,
+        "15m" to 0L,
+        "1h" to 0L
+    )
+
     // Consensus Memory Engine State
     private var memoryLastConsensus: String? = null
     private var memoryLastNarrative: String? = null
@@ -256,6 +274,7 @@ object TelemetryRepository {
         }
     }
 
+    // --- PHASE 5, 6 & WYCKOFF V3 ENGINE: DUAL ENGINE CONSENSUS, TRAP DETECTION, ABSORPTION & SMPE OVERRIDE ENGINE ---
     private fun evaluateFlowConsensus(
         oiState: OIFlowRegimeState,
         ofState: OrderFlowRegimeState,
@@ -266,10 +285,12 @@ object TelemetryRepository {
         val oiStrength = oiState.strength.uppercase()
         val cvdConfirm = oiState.confirmation
 
+        // --- PHASE 6: INVENTORY VS FLOW CONFLICT DETECTOR (TUNED 0.20% THRESHOLD) ---
         val inventoryIncreasing = smpeState.longCapitalDeltaPct >= 0.20 || smpeState.inventoryMomentum >= 0.30
         val inventoryDecreasing = smpeState.longCapitalDeltaPct <= -0.20 || smpeState.inventoryMomentum <= -0.30
-        val flowBuying = ofRegime == "BUY AGGRESSION"
-        val flowSelling = ofRegime == "SELL AGGRESSION"
+
+        val flowBuying = ofRegime == "EXPANSIVE BUYING" || ofRegime == "BID ABSORPTION" || ofRegime == "SHORT TRAP" || ofRegime == "THIN-ASK DRIFT" || ofRegime == "BUY AGGRESSION"
+        val flowSelling = ofRegime == "EXPANSIVE SELLING" || ofRegime == "ASK ABSORPTION" || ofRegime == "LONG TRAP" || ofRegime == "THIN-BID DROP" || ofRegime == "SELL AGGRESSION"
 
         val (invVsFlowLabel, invVsFlowBias) = when {
             flowSelling && inventoryIncreasing -> "PROFIT TAKING INSIDE BULLISH CAMPAIGN" to "BULLISH"
@@ -279,67 +300,104 @@ object TelemetryRepository {
             else -> "ALIGNED / BALANCED" to "NEUTRAL"
         }
 
+        // --- PHASE 6: PRIORITY HIERARCHY & CONSENSUS OVERRIDE ---
         val isSmpeOverride = smpeState.regime == "SPONSORED_RALLY" &&
             (oiRegime == "NEW LONGS" || oiRegime == "SHORT COVERING") &&
-            (ofRegime == "SELL AGGRESSION" && abs(ofState.deltaPercent) < 25.0)
+            ((ofRegime == "EXPANSIVE SELLING" || ofRegime == "SELL AGGRESSION") && abs(ofState.deltaPercent) < 25.0)
+
+        // EXPLICIT WYCKOFF ABSORPTION RULES
+        val isBullishAbsorptionTrap = (ofRegime == "BID ABSORPTION" || ofRegime == "SHORT TRAP") && oiRegime == "NEW SHORTS"
+        val isBearishDistributionWall = (ofRegime == "ASK ABSORPTION" || ofRegime == "LONG TRAP") && (oiRegime == "NEW LONGS" || smpeState.regime == "DISTRIBUTION")
 
         val (candidateConsensus, candidateBadgeColor, narrativeText, ruleName) = when {
+            // 1. HIGHEST-PRIORITY STRUCTURAL OVERRIDE: SMART MONEY DOMINANCE
             isSmpeOverride -> Quadruple(
                 "SMART MONEY DOMINANCE",
                 Color(0xFF10B981),
                 "Large traders actively expanding inventory despite mild short-term sell pressure.",
                 "SMPE_OVERRIDE: SPONSORED_RALLY + BULLISH_OI => SMART_MONEY_DOMINANCE"
             )
-            oiRegime == "NEW LONGS" && ofRegime == "BUY AGGRESSION" -> Quadruple(
+
+            // 2. EXPLICIT WYCKOFF ABSORPTION RULES
+            isBullishAbsorptionTrap -> Quadruple(
+                "BULLISH ABSORPTION TRAP",
+                Color(0xFF00C853),
+                "Passive bids absorbing aggressive short entries at support.",
+                "BID_ABSORPTION + NEW_SHORTS => BULLISH_ABSORPTION_TRAP"
+            )
+
+            isBearishDistributionWall -> Quadruple(
+                "BEARISH DISTRIBUTION WALL",
+                Color(0xFFFF9100),
+                "Passive asks absorbing breakout buyers into overhead supply.",
+                "ASK_ABSORPTION + NEW_LONGS/DISTRIBUTION => BEARISH_DISTRIBUTION_WALL"
+            )
+
+            // STATE 1: STRONG BULLISH CONTINUATION
+            oiRegime == "NEW LONGS" && (ofRegime == "EXPANSIVE BUYING" || ofRegime == "BUY AGGRESSION") -> Quadruple(
                 "STRONG BULLISH CONTINUATION",
                 Color(0xFF10B981),
                 "Fresh longs entering while buyers control short-term order flow.",
-                "NEW_LONGS + BUY_AGGRESSION => STRONG_BULLISH_CONTINUATION"
+                "NEW_LONGS + EXPANSIVE_BUYING => STRONG_BULLISH_CONTINUATION"
             )
-            oiRegime == "NEW SHORTS" && ofRegime == "SELL AGGRESSION" -> Quadruple(
+
+            // STATE 2: STRONG BEARISH CONTINUATION
+            oiRegime == "NEW SHORTS" && (ofRegime == "EXPANSIVE SELLING" || ofRegime == "SELL AGGRESSION") -> Quadruple(
                 "STRONG BEARISH CONTINUATION",
                 Color(0xFFEF4444),
                 "Fresh shorts entering while sellers control short-term order flow.",
-                "NEW_SHORTS + SELL_AGGRESSION => STRONG_BEARISH_CONTINUATION"
+                "NEW_SHORTS + EXPANSIVE_SELLING => STRONG_BEARISH_CONTINUATION"
             )
-            oiRegime == "NEW SHORTS" && ofRegime == "BUY AGGRESSION" -> Quadruple(
+
+            // STATE 3: SHORT TRAP
+            oiRegime == "NEW SHORTS" && (ofRegime == "EXPANSIVE BUYING" || ofRegime == "BUY AGGRESSION") -> Quadruple(
                 "SHORT TRAP",
                 Color(0xFFF59E0B),
                 "New shorts entering while buyers absorb and push price higher. Potential squeeze risk.",
-                "NEW_SHORTS + BUY_AGGRESSION => SHORT_TRAP"
+                "NEW_SHORTS + EXPANSIVE_BUYING => SHORT_TRAP"
             )
-            oiRegime == "NEW LONGS" && ofRegime == "SELL AGGRESSION" -> Quadruple(
+
+            // STATE 4: LONG TRAP
+            oiRegime == "NEW LONGS" && (ofRegime == "EXPANSIVE SELLING" || ofRegime == "SELL AGGRESSION") -> Quadruple(
                 "LONG TRAP",
                 Color(0xFFF97316),
                 "New longs entering while sellers control aggressive flow. Potential downside trap.",
-                "NEW_LONGS + SELL_AGGRESSION => LONG_TRAP"
+                "NEW_LONGS + EXPANSIVE_SELLING => LONG_TRAP"
             )
-            oiRegime == "LONG LIQUIDATIONS" && ofRegime == "BUY AGGRESSION" -> Quadruple(
+
+            // STATE 5: CAPITULATION REVERSAL
+            oiRegime == "LONG LIQUIDATIONS" && (ofRegime == "EXPANSIVE BUYING" || ofRegime == "BID ABSORPTION" || ofRegime == "BUY AGGRESSION") -> Quadruple(
                 "CAPITULATION REVERSAL",
                 Color(0xFFEAB308),
                 "Long liquidation event followed by aggressive buying pressure. Potential local bottom.",
-                "LONG_LIQUIDATIONS + BUY_AGGRESSION => CAPITULATION_REVERSAL"
+                "LONG_LIQUIDATIONS + BUY_EFFORT => CAPITULATION_REVERSAL"
             )
-            oiRegime == "SHORT COVERING" && ofRegime == "BUY AGGRESSION" -> Quadruple(
+
+            // STATE 6: SHORT SQUEEZE
+            oiRegime == "SHORT COVERING" && (ofRegime == "EXPANSIVE BUYING" || ofRegime == "BUY AGGRESSION") -> Quadruple(
                 "SHORT SQUEEZE",
                 Color(0xFF22C55E),
                 "Shorts exiting while buyers continue lifting offers. Potential squeeze continuation.",
-                "SHORT_COVERING + BUY_AGGRESSION => SHORT_SQUEEZE"
+                "SHORT_COVERING + EXPANSIVE_BUYING => SHORT_SQUEEZE"
             )
-            (oiRegime == "NEW LONGS" && ofRegime == "SELL_ABSORPTION") ||
-            (oiRegime == "NEW LONGS" && ofRegime == "BALANCED FLOW" && oiState.priceDeltaPercent < 0) -> Quadruple(
+
+            // STATE 7: DISTRIBUTION
+            oiRegime == "NEW LONGS" && ofRegime == "BALANCED FLOW" && oiState.priceDeltaPercent < 0 -> Quadruple(
                 "DISTRIBUTION",
                 Color(0xFFF97316),
                 "Longs entering but aggressive buying unable to advance price efficiently. Potential distribution.",
-                "NEW_LONGS + SELL_ABSORPTION/STALL => DISTRIBUTION"
+                "NEW_LONGS + STALL => DISTRIBUTION"
             )
-            (oiRegime == "NEW SHORTS" && ofRegime == "BUY_ABSORPTION") ||
-            (oiRegime == "NEW SHORTS" && ofRegime == "BALANCED FLOW" && oiState.priceDeltaPercent > 0) -> Quadruple(
+
+            // STATE 8: ACCUMULATION
+            oiRegime == "NEW SHORTS" && ofRegime == "BALANCED FLOW" && oiState.priceDeltaPercent > 0 -> Quadruple(
                 "ACCUMULATION",
                 Color(0xFF3B82F6),
                 "Selling pressure absorbed without meaningful price decline. Potential accumulation.",
-                "NEW_SHORTS + BUY_ABSORPTION/STALL => ACCUMULATION"
+                "NEW_SHORTS + STALL => ACCUMULATION"
             )
+
+            // STATE 9: NEUTRAL
             else -> Quadruple(
                 "NEUTRAL",
                 Color(0xFF9CA3AF),
@@ -348,6 +406,7 @@ object TelemetryRepository {
             )
         }
 
+        // --- CONSENSUS MEMORY LAYER UPDATE RULES ---
         val now = System.currentTimeMillis()
         val isNonNeutral = candidateConsensus != "NEUTRAL" && candidateConsensus != "BUILDING WINDOW"
         val activeConsensus = _uiState.value.flowConsensus.consensus
@@ -375,9 +434,9 @@ object TelemetryRepository {
 
         var score = 0
         if (oiStrength == "HIGH") score += 2 else if (oiStrength == "MEDIUM") score += 1
-        if (ofRegime == "BUY AGGRESSION" || ofRegime == "SELL AGGRESSION") score += 2
+        if (flowBuying || flowSelling) score += 2
         if (cvdConfirm == "CVD CONFIRMED") score += 2 else if (cvdConfirm == "DIVERGENCE") score -= 1
-        if (isSmpeOverride) score += 2
+        if (isSmpeOverride || isBullishAbsorptionTrap || isBearishDistributionWall) score += 2
 
         val (confText, confColor) = when {
             score >= 4 -> "HIGH" to Color(0xFF10B981)
@@ -392,7 +451,7 @@ object TelemetryRepository {
             inputOiRegime = oiRegime,
             inputOrderFlowRegime = ofRegime,
             inputOiStrength = oiStrength,
-            inputOrderFlowStrength = if (ofRegime.contains("AGGRESSION")) "HIGH" else "MEDIUM",
+            inputOrderFlowStrength = if (flowBuying || flowSelling) "HIGH" else "MEDIUM",
             inputCvdConfirmation = cvdConfirm,
             inputSmpeRegime = smpeState.regime,
             inputSmpeDominance = smpeState.dominance,
@@ -421,6 +480,7 @@ object TelemetryRepository {
         )
     }
 
+    // --- PHASE 4, 4.5 & WYCKOFF V3 EFFORT VS RESULT ENGINE ---
     private fun processLiveTradeSnapshot(trade: TradeSnapshot) {
         tradeSnapshotBuffer.addLast(trade)
 
@@ -434,7 +494,9 @@ object TelemetryRepository {
         }
         val msgsPerSec = tradeRateWindow.size.toDouble()
 
-        val windowDurationMs = getTimeframeDurationMs(_uiState.value.interval)
+        val activeTf = _uiState.value.interval
+        val thresholds = TimeframeThresholds.getThresholds(activeTf)
+        val windowDurationMs = getTimeframeDurationMs(activeTf)
         val cutoffTime = now - windowDurationMs
 
         while (tradeSnapshotBuffer.isNotEmpty() && tradeSnapshotBuffer.first().timestampMs < cutoffTime) {
@@ -463,12 +525,183 @@ object TelemetryRepository {
 
         val isBuilding = tradeSnapshotBuffer.size < 5
 
-        val (regimeStr, colorVal) = when {
-            isBuilding || totalVol == 0.0 -> "BALANCED FLOW" to Color(0xFF9CA3AF)
-            deltaPct >= 12.0 -> "BUY AGGRESSION" to Color(0xFF10B981)
-            deltaPct <= -12.0 -> "SELL AGGRESSION" to Color(0xFFEF4444)
-            else -> "BALANCED FLOW" to Color(0xFF9CA3AF)
+        // Wyckoff Effort vs Result Volume History
+        if (!isBuilding && totalVol > 0.0) {
+            volumeHistoryBuffer.addLast(totalVol)
+            while (volumeHistoryBuffer.size > 20) {
+                volumeHistoryBuffer.removeFirst()
+            }
         }
+
+        val avgWindowVol = if (volumeHistoryBuffer.isNotEmpty()) volumeHistoryBuffer.average() else totalVol
+        val effortRatio = if (avgWindowVol > 0.0) totalVol / avgWindowVol else 1.0
+        val priceEfficiency = if (abs(deltaPct) > 1.0) (priceDeltaPct / abs(deltaPct)) * 100.0 else 0.0
+
+        // Timeframe-Normalized Flow Efficiency
+        val normalizedPriceDelta = abs(priceDeltaPct) / thresholds.tfScaleFactor
+        val flowEfficiency = normalizedPriceDelta / kotlin.math.max(abs(deltaPct), 1.0)
+
+        val efficiencyState = when {
+            flowEfficiency < 0.02 -> "ABSORPTION"
+            flowEfficiency <= 0.06 -> "NORMAL_AUCTION"
+            flowEfficiency <= 0.12 -> "INITIATIVE_MOVE"
+            else -> "LIQUIDITY_VACUUM"
+        }
+
+        val effortLevel = when {
+            effortRatio >= 1.35 || abs(deltaPct) >= thresholds.deltaTriggerPct -> "HIGH"
+            effortRatio <= 0.75 && abs(deltaPct) < thresholds.deltaTriggerPct -> "LOW"
+            else -> "MODERATE"
+        }
+
+        val resultLevel = when {
+            abs(priceDeltaPct) <= thresholds.absorptionMaxPricePct -> "STALLED"
+            abs(priceDeltaPct) >= thresholds.vacuumMinPricePct -> "EXPANSIVE"
+            else -> "MODERATE"
+        }
+
+        // 9 Deterministic Wyckoff Regimes (Evaluating Trap Detection BEFORE Absorption)
+        val (regimeStr, colorVal, mechanicsSummaryStr) = when {
+            isBuilding || totalVol == 0.0 -> Triple(
+                "BALANCED FLOW",
+                Color(0xFF9CA3AF),
+                "Building window telemetry..."
+            )
+
+            // 1. TRAP DETECTION ENGINE (HIGH PRIORITY)
+            deltaPct >= thresholds.deltaTriggerPct && priceDeltaPct <= -thresholds.absorptionMaxPricePct -> Triple(
+                "LONG TRAP",
+                Color(0xFFFF5252), // Bright Red
+                "Aggressive buyers unable to achieve upside and losing ground"
+            )
+            deltaPct <= -thresholds.deltaTriggerPct && priceDeltaPct >= thresholds.absorptionMaxPricePct -> Triple(
+                "SHORT TRAP",
+                Color(0xFF00C853), // Bright Green
+                "Aggressive sellers unable to achieve downside and losing ground"
+            )
+
+            // 2. ABSORPTION ENGINE
+            deltaPct >= thresholds.deltaTriggerPct && priceDeltaPct <= thresholds.absorptionMaxPricePct -> Triple(
+                "ASK ABSORPTION",
+                Color(0xFFFF9100), // Amber / Orange
+                "Heavy taker buying absorbed by passive limit ask wall"
+            )
+            deltaPct <= -thresholds.deltaTriggerPct && priceDeltaPct >= -thresholds.absorptionMaxPricePct -> Triple(
+                "BID ABSORPTION",
+                Color(0xFF00E5FF), // Cyan / Teal
+                "Heavy taker selling absorbed by passive limit bid wall"
+            )
+
+            // 3. EXPANSION ENGINE
+            deltaPct >= thresholds.deltaTriggerPct && priceDeltaPct > thresholds.absorptionMaxPricePct -> Triple(
+                "EXPANSIVE BUYING",
+                Color(0xFF00C853), // Bright Green
+                "High buy effort driving clean upward price expansion"
+            )
+            deltaPct <= -thresholds.deltaTriggerPct && priceDeltaPct < -thresholds.absorptionMaxPricePct -> Triple(
+                "EXPANSIVE SELLING",
+                Color(0xFFFF5252), // Bright Red
+                "High sell effort driving clean downward price breakdown"
+            )
+
+            // 4. VACUUM DRIFT ENGINE
+            abs(deltaPct) < thresholds.deltaTriggerPct && priceDeltaPct >= thresholds.vacuumMinPricePct -> Triple(
+                "THIN-ASK DRIFT",
+                Color(0xFF66BB6A), // Muted Green
+                "Price rising on low taker effort (overhead liquidity vacuum)"
+            )
+            abs(deltaPct) < thresholds.deltaTriggerPct && priceDeltaPct <= -thresholds.vacuumMinPricePct -> Triple(
+                "THIN-BID DROP",
+                Color(0xFFEF5350), // Muted Red
+                "Price dropping on low taker effort (pulled bid liquidity)"
+            )
+
+            else -> Triple(
+                "BALANCED FLOW",
+                Color(0xFF9CA3AF), // Neutral Gray
+                "Order flow and price movement balanced within normal thresholds"
+            )
+        }
+
+        // Window-Commit Cadence: Commit snapshot once per closed timeframe window
+        val lastCommit = tfLastCommitMs[activeTf] ?: 0L
+        val activeBuffer = tfWindowBuffers[activeTf] ?: ArrayDeque()
+
+        if (!isBuilding && now - lastCommit >= windowDurationMs) {
+            activeBuffer.addLast(
+                OrderFlowSnapshot(
+                    timestampMs = now,
+                    regime = regimeStr,
+                    effortRatio = effortRatio,
+                    normalizedEfficiency = flowEfficiency,
+                    deltaPct = deltaPct,
+                    priceDeltaPct = priceDeltaPct
+                )
+            )
+            while (activeBuffer.size > 10) {
+                activeBuffer.removeFirst()
+            }
+            tfLastCommitMs[activeTf] = now
+        }
+
+        // REGIME PERSISTENCE ENGINE
+        val previousRegimeStr = if (activeBuffer.size >= 2) activeBuffer[activeBuffer.size - 2].regime else null
+
+        var persistenceCount = 1
+        for (i in activeBuffer.indices.reversed()) {
+            if (i < activeBuffer.size - 1) {
+                if (activeBuffer[i].regime == regimeStr) {
+                    persistenceCount++
+                } else break
+            }
+        }
+
+        // Check if effortRatio or flowEfficiency is falling over last 3 closed windows
+        val isExhausting = activeBuffer.size >= 3 && run {
+            val last3 = activeBuffer.takeLast(3)
+            (last3[0].effortRatio > last3[1].effortRatio && last3[1].effortRatio > last3[2].effortRatio) ||
+            (last3[0].normalizedEfficiency > last3[1].normalizedEfficiency && last3[1].normalizedEfficiency > last3[2].normalizedEfficiency)
+        }
+
+        val persistenceStateStr = when {
+            persistenceCount == 1 -> "FRESH"
+            persistenceCount in 2..3 -> "DEVELOPING"
+            persistenceCount in 4..5 -> "ESTABLISHED"
+            persistenceCount >= 6 && isExhausting -> "EXHAUSTING"
+            else -> "DOMINANT"
+        }
+
+        // ABSORPTION ESCALATION (WITH FLICKER TOLERANCE - Last 4 closed windows)
+        val last4 = activeBuffer.takeLast(4)
+        val bidDefenseHits = last4.count { it.regime == "BID ABSORPTION" || it.regime == "SHORT TRAP" }
+        val askDefenseHits = last4.count { it.regime == "ASK ABSORPTION" || it.regime == "LONG TRAP" }
+
+        val defenseStateStr = when {
+            bidDefenseHits >= 3 -> "ACTIVE_BID_DEFENSE"
+            askDefenseHits >= 3 -> "ACTIVE_ASK_DEFENSE"
+            else -> "NONE"
+        }
+
+        // Streaks & Regime Scores
+        var absStreak = 0
+        var expStreak = 0
+        var vacStreak = 0
+
+        for (snap in activeBuffer.asReversed()) {
+            val r = snap.regime
+            if (r == "ASK ABSORPTION" || r == "BID ABSORPTION" || r == "LONG TRAP" || r == "SHORT TRAP") absStreak++ else break
+        }
+        for (snap in activeBuffer.asReversed()) {
+            val r = snap.regime
+            if (r == "EXPANSIVE BUYING" || r == "EXPANSIVE SELLING") expStreak++ else break
+        }
+        for (snap in activeBuffer.asReversed()) {
+            val r = snap.regime
+            if (r == "THIN-ASK DRIFT" || r == "THIN-BID DROP") vacStreak++ else break
+        }
+
+        val bullScore = activeBuffer.count { it.regime in listOf("EXPANSIVE BUYING", "BID ABSORPTION", "SHORT TRAP", "THIN-ASK DRIFT") }
+        val bearScore = activeBuffer.count { it.regime in listOf("EXPANSIVE SELLING", "ASK ABSORPTION", "LONG TRAP", "THIN-BID DROP") }
 
         val wsStage = wsManager.tradeStreamStage.value
         val socketUrl = wsManager.tradeSocketUrl.value
@@ -512,7 +745,7 @@ object TelemetryRepository {
             bufferedTradesCount = tradeSnapshotBuffer.size,
             latestSnapshotTimestampFormatted = latestSnapshotTimeFormatted,
             latestSnapshotPrice = latestSnapshotPrice,
-            currentTimeframe = _uiState.value.interval,
+            currentTimeframe = activeTf,
             windowStatus = if (isBuilding) "BUILDING" else "READY",
             lastPrice = trade.price,
             lastQuantity = trade.quantity,
@@ -521,6 +754,23 @@ object TelemetryRepository {
             sellVolume = sellVol,
             netDelta = netDelta,
             deltaPercent = deltaPct,
+            effortRatio = effortRatio,
+            effortLevel = effortLevel,
+            resultLevel = resultLevel,
+            priceEfficiency = priceEfficiency,
+            flowEfficiency = flowEfficiency,
+            efficiencyState = efficiencyState,
+            activeThresholdsLabel = thresholds.activeThresholdsLabel,
+            currentRegime = regimeStr,
+            previousRegime = previousRegimeStr,
+            persistenceCount = persistenceCount,
+            persistenceState = persistenceStateStr,
+            absorptionStreak = absStreak,
+            expansionStreak = expStreak,
+            vacuumStreak = vacStreak,
+            defenseState = defenseStateStr,
+            bullishRegimeScore = bullScore,
+            bearishRegimeScore = bearScore,
             parseFailuresCount = parseFailures,
             warnings = warnings
         )
@@ -534,6 +784,17 @@ object TelemetryRepository {
             deltaPercent = deltaPct,
             priceDeltaPercent = priceDeltaPct,
             totalVolume = totalVol,
+            effortLevel = effortLevel,
+            resultLevel = resultLevel,
+            effortRatio = effortRatio,
+            priceEfficiency = priceEfficiency,
+            flowEfficiency = flowEfficiency,
+            efficiencyState = efficiencyState,
+            mechanicsSummary = mechanicsSummaryStr,
+            activeThresholdsLabel = thresholds.activeThresholdsLabel,
+            persistenceCount = persistenceCount,
+            persistenceState = persistenceStateStr,
+            defenseState = defenseStateStr,
             buildingWindow = isBuilding,
             debugState = debugState
         )
@@ -582,6 +843,12 @@ object TelemetryRepository {
         tradeSnapshotBuffer.clear()
         tradeRateWindow.clear()
         smartMoneySnapshotBuffer.clear()
+        volumeHistoryBuffer.clear()
+
+        // Clear all 4 timeframe window-commit memory buffers on symbol switch
+        tfWindowBuffers.values.forEach { it.clear() }
+        tfLastCommitMs.keys.forEach { tfLastCommitMs[it] = 0L }
+
         memoryLastConsensus = null
         memoryLastNarrative = null
         memoryLastTimestampMs = null

@@ -31,6 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.siam.flowmatrix.ui.theme.FlowMatrixTheme
+import java.util.Locale
 import kotlin.math.abs
 
 // High-Contrast Color Palette
@@ -41,10 +42,10 @@ val GoldNeutral = Color(0xFFFFB300)
 fun formatCompactUsdt(amount: Double): String {
     val absAmount = abs(amount)
     return when {
-        absAmount >= 1_000_000_000 -> String.format("$%.2fB", amount / 1_000_000_000.0)
-        absAmount >= 1_000_000 -> String.format("$%.2fM", amount / 1_000_000.0)
-        absAmount >= 1_000 -> String.format("$%.2fK", amount / 1_000.0)
-        else -> String.format("$%.2f", amount)
+        absAmount >= 1_000_000_000 -> String.format(Locale.US, "$%.2fB", amount / 1_000_000_000.0)
+        absAmount >= 1_000_000 -> String.format(Locale.US, "$%.2fM", amount / 1_000_000.0)
+        absAmount >= 1_000 -> String.format(Locale.US, "$%.2fK", amount / 1_000.0)
+        else -> String.format(Locale.US, "$%.2f", amount)
     }
 }
 
@@ -268,9 +269,9 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                         Text("Active Contract: ${state.symbol}", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                         if (activeCandle != null) {
                             val priceStr = if (activeCandle.close < 1.0) {
-                                String.format("$%.5f", activeCandle.close)
+                                String.format(Locale.US, "$%.5f", activeCandle.close)
                             } else {
-                                String.format("$%,.2f", activeCandle.close)
+                                String.format(Locale.US, "$%,.2f", activeCandle.close)
                             }
                             Text(priceStr, fontWeight = FontWeight.Black, fontSize = 20.sp, color = MaterialTheme.colorScheme.primary)
                         } else {
@@ -771,7 +772,7 @@ fun SmartMoneyPositionCard(
         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Long Inventory", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
-                text = "${formatCompactUsdt(smpeState.longCapital)} (${String.format("%+.2f%%", smpeState.longCapitalDeltaPct)})",
+                text = "${formatCompactUsdt(smpeState.longCapital)} (${String.format(Locale.US, "%+.2f%%", smpeState.longCapitalDeltaPct)})",
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = longDeltaColor
@@ -783,7 +784,7 @@ fun SmartMoneyPositionCard(
         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Short Inventory", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
-                text = "${formatCompactUsdt(smpeState.shortCapital)} (${String.format("%+.2f%%", smpeState.shortCapitalDeltaPct)})",
+                text = "${formatCompactUsdt(smpeState.shortCapital)} (${String.format(Locale.US, "%+.2f%%", smpeState.shortCapitalDeltaPct)})",
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = shortDeltaColor
@@ -798,7 +799,7 @@ fun SmartMoneyPositionCard(
         ) {
             Text("Dominance Ratio", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(String.format("%.2fx", smpeState.capitalRatio), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(String.format(Locale.US, "%.2fx", smpeState.capitalRatio), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.width(6.dp))
                 Surface(
                     color = smpeState.dominanceColor.copy(alpha = 0.15f),
@@ -817,15 +818,15 @@ fun SmartMoneyPositionCard(
 
         // ROW 5: Inventory Momentum
         val momColor = if (smpeState.inventoryMomentum > 0) GreenPositive else if (smpeState.inventoryMomentum < 0) CoralNegative else MaterialTheme.colorScheme.onSurface
-        DataRow("Inventory Momentum", String.format("%+.2f%%", smpeState.inventoryMomentum), momColor)
+        DataRow("Inventory Momentum", String.format(Locale.US, "%+.2f%%", smpeState.inventoryMomentum), momColor)
 
         // ROW 6: Position Share (L/S)
         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Position Share (L/S)", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row {
-                Text(String.format("%.2f%%", smpeState.longPositionPct), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = GreenPositive)
+                Text(String.format(Locale.US, "%.2f%%", smpeState.longPositionPct), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = GreenPositive)
                 Text(" / ", fontSize = 14.sp, color = Color.Gray)
-                Text(String.format("%.2f%%", smpeState.shortPositionPct), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CoralNegative)
+                Text(String.format(Locale.US, "%.2f%%", smpeState.shortPositionPct), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CoralNegative)
             }
         }
 
@@ -868,7 +869,7 @@ fun SmartMoneyPositionCard(
 
                 DebugHeader("INVENTORY CALCULATIONS")
                 DebugRow("Net Inventory", formatCompactUsdt(smpeState.netInventory))
-                DebugRow("Position Share Spread", String.format("%+.2f%%", smpeState.positioningSpread))
+                DebugRow("Position Share Spread", String.format(Locale.US, "%+.2f%%", smpeState.positioningSpread))
                 DebugRow("Long Capital Delta", formatCompactUsdt(smpeState.longCapitalDelta))
                 DebugRow("Short Capital Delta", formatCompactUsdt(smpeState.shortCapitalDelta))
 
@@ -1094,7 +1095,7 @@ fun FlowConsensusCard(
     }
 }
 
-// PHASE 4 & 4.5: Order Flow Regime (Live WS) Card with Full Diagnostics Pipeline
+// Wyckoff Effort vs Result Order Flow Regime Card V3
 @Composable
 fun OrderFlowRegimeCard(
     regimeState: OrderFlowRegimeState,
@@ -1131,7 +1132,7 @@ fun OrderFlowRegimeCard(
     ) {
         // ROW 1: Active Regime Badge
         Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1150,53 +1151,120 @@ fun OrderFlowRegimeCard(
             }
         }
 
+        // ROW 2: Effort vs Result Status & Mechanics Subtitle
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Effort vs Result", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = "${regimeState.effortLevel} EFFORT / ${regimeState.resultLevel} RESULT",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        Text(
+            text = regimeState.mechanicsSummary,
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+
+        // ROW 3: Persistence Engine
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Persistence", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = "${regimeState.persistenceState} (${regimeState.persistenceCount} ${if (regimeState.persistenceCount == 1) "window" else "windows"})",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        // ROW 4: Defense State
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Defense State", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val defColor = when (regimeState.defenseState) {
+                "ACTIVE_BID_DEFENSE" -> GreenPositive
+                "ACTIVE_ASK_DEFENSE" -> CoralNegative
+                else -> Color.Gray
+            }
+            if (regimeState.defenseState != "NONE") {
+                Surface(
+                    color = defColor.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = regimeState.defenseState.replace("_", " "),
+                        color = defColor,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+            } else {
+                Text("NONE", fontSize = 12.sp, color = Color.Gray)
+            }
+        }
+
         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-        // ROW 2: Buy Volume
+        // ROW 5: Buy Volume
         DataRow(
             label = "Buy Volume ($interval)",
-            value = String.format("%,.2f Vol", regimeState.buyVolume),
+            value = String.format(Locale.US, "%,.2f Vol", regimeState.buyVolume),
             valueColor = GreenPositive
         )
 
-        // ROW 3: Sell Volume
+        // ROW 6: Sell Volume
         DataRow(
             label = "Sell Volume ($interval)",
-            value = String.format("%,.2f Vol", regimeState.sellVolume),
+            value = String.format(Locale.US, "%,.2f Vol", regimeState.sellVolume),
             valueColor = CoralNegative
         )
 
-        // ROW 4: Net Delta
+        // ROW 7: Net Delta
         val deltaColor = if (regimeState.netDelta > 0) GreenPositive else if (regimeState.netDelta < 0) CoralNegative else MaterialTheme.colorScheme.onSurface
         DataRow(
             label = "Net Delta",
-            value = String.format("%+,.2f Vol", regimeState.netDelta),
+            value = String.format(Locale.US, "%+,.2f Vol", regimeState.netDelta),
             valueColor = deltaColor
         )
 
-        // ROW 5: Delta %
+        // ROW 8: Delta %
         DataRow(
             label = "Delta %",
-            value = String.format("%+.2f%%", regimeState.deltaPercent),
+            value = String.format(Locale.US, "%+.2f%%", regimeState.deltaPercent),
             valueColor = deltaColor
         )
 
-        // ROW 6: Price Delta %
+        // ROW 9: Dynamic Timeframe Price Delta %
         val priceColor = if (regimeState.priceDeltaPercent > 0) GreenPositive else if (regimeState.priceDeltaPercent < 0) CoralNegative else MaterialTheme.colorScheme.onSurface
         DataRow(
             label = "Price Delta % ($interval)",
-            value = String.format("%+.2f%%", regimeState.priceDeltaPercent),
+            value = String.format(Locale.US, "%+.2f%%", regimeState.priceDeltaPercent),
             valueColor = priceColor
         )
 
-        // --- STEP 9: FULL DIAGNOSTICS & DEBUG SECTION ---
+        // --- WYCKOFF V3 DIAGNOSTICS & DEBUG SECTION ---
         if (debug.isDebugEnabled) {
             Spacer(modifier = Modifier.height(8.dp))
             HorizontalDivider(color = GoldNeutral.copy(alpha = 0.4f))
             Spacer(modifier = Modifier.height(8.dp))
 
             Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("🛠 ORDER FLOW DIAGNOSTICS / DEBUG", fontSize = 11.sp, fontWeight = FontWeight.Black, color = GoldNeutral)
+                Text("🛠 ORDER FLOW & WYCKOFF V3 DIAGNOSTICS", fontSize = 11.sp, fontWeight = FontWeight.Black, color = GoldNeutral)
 
                 // VALIDATION WARNING BANNERS
                 debug.warnings.forEach { warning ->
@@ -1215,6 +1283,22 @@ fun OrderFlowRegimeCard(
                     }
                 }
 
+                DebugHeader("WYCKOFF EFFORT vs RESULT TRACE")
+                DebugRow("Active TF Thresholds", debug.activeThresholdsLabel)
+                DebugRow("Effort Ratio (vs 20-bar)", String.format(Locale.US, "%.2fx [%s]", debug.effortRatio, debug.effortLevel))
+                DebugRow("Price Efficiency", String.format(Locale.US, "%+.2f%%", debug.priceEfficiency))
+                DebugRow("Normalized Flow Efficiency", String.format(Locale.US, "%.4f [%s]", debug.flowEfficiency, debug.efficiencyState))
+                DebugRow("Delta % Check", String.format(Locale.US, "Actual %+.2f%%", debug.deltaPercent))
+                DebugRow("Price Delta Check", String.format(Locale.US, "Actual %+.2f%%", regimeState.priceDeltaPercent))
+
+                DebugHeader("PERSISTENCE & STREAKS (WINDOW-COMMIT)")
+                DebugRow("Current Regime", debug.currentRegime)
+                DebugRow("Previous Regime", debug.previousRegime ?: "NONE")
+                DebugRow("Persistence Count", "${debug.persistenceCount} [${debug.persistenceState}]")
+                DebugRow("Streaks (Abs/Exp/Vac)", "Abs: ${debug.absorptionStreak} | Exp: ${debug.expansionStreak} | Vac: ${debug.vacuumStreak}")
+                DebugRow("Defense State", debug.defenseState)
+                DebugRow("Regime Scores (Bull/Bear)", "Bull: ${debug.bullishRegimeScore} | Bear: ${debug.bearishRegimeScore}")
+
                 DebugHeader("WS STATUS")
                 val stageColor = when (debug.connectionStage) {
                     WsConnectionStage.RECEIVING_MESSAGES -> GreenPositive
@@ -1231,29 +1315,15 @@ fun OrderFlowRegimeCard(
 
                 DebugHeader("STREAM HEALTH")
                 DebugRow("Messages Received", "${debug.messagesReceived}")
-                DebugRow("Messages/sec", String.format("%.1f msg/s", debug.messagesPerSecond))
+                DebugRow("Messages/sec", String.format(Locale.US, "%.1f msg/s", debug.messagesPerSecond))
                 DebugRow("Reconnect Count", "${debug.reconnectCount}")
                 DebugRow("Last Message Time", debug.lastMessageTimestampFormatted)
-
-                DebugHeader("LAST MESSAGE")
-                DebugRow("Raw Preview", debug.rawMessagePreview)
-
-                DebugHeader("PARSED TRADE")
-                DebugRow("Price", String.format("$%.5f", debug.lastPrice))
-                DebugRow("Quantity", String.format("%.4f Vol", debug.lastQuantity))
-                DebugRow("Timestamp", debug.lastMessageTimestampFormatted)
-                DebugRow("isBuyerMaker", if (debug.lastIsBuyerMaker) "TRUE (Market Sell)" else "FALSE (Market Buy)", if (debug.lastIsBuyerMaker) CoralNegative else GreenPositive)
 
                 DebugHeader("TRADE BUFFER")
                 DebugRow("Buffered Trades", "${debug.bufferedTradesCount}")
                 DebugRow("Latest Snapshot Time", debug.latestSnapshotTimestampFormatted)
-                DebugRow("Latest Snapshot Price", String.format("$%.5f", debug.latestSnapshotPrice))
+                DebugRow("Latest Snapshot Price", String.format(Locale.US, "$%.5f", debug.latestSnapshotPrice))
                 DebugRow("Window Status", debug.windowStatus, if (debug.windowStatus == "READY") GreenPositive else Color.Gray)
-
-                DebugHeader("SYMBOL SWITCHING")
-                DebugRow("Previous Symbol", debug.previousSymbol ?: "NONE")
-                DebugRow("Current Symbol", debug.currentSymbol)
-                DebugRow("Last Subscription Time", debug.lastSubscriptionTimeFormatted)
             }
         }
     }
@@ -1327,7 +1397,7 @@ fun OiFlowRegimeCard(
         val priceSignStr = if (regimeState.priceDeltaPercent > 0.0) "+" else ""
         DataRow(
             label = "Price Delta ($interval)",
-            value = if (regimeState.buildingWindow) "--" else String.format("%s%.2f%%", priceSignStr, regimeState.priceDeltaPercent),
+            value = if (regimeState.buildingWindow) "--" else String.format(Locale.US, "%s%.2f%%", priceSignStr, regimeState.priceDeltaPercent),
             valueColor = priceColor
         )
 
@@ -1338,7 +1408,7 @@ fun OiFlowRegimeCard(
             else -> CoralNegative
         }
         val oiSignStr = if (regimeState.oiDeltaContracts > 0.0) "+" else ""
-        val oiValueStr = if (regimeState.buildingWindow) "--" else String.format("%s%,.2f (%s%.2f%%)", oiSignStr, regimeState.oiDeltaContracts, oiSignStr, regimeState.oiDeltaPercent)
+        val oiValueStr = if (regimeState.buildingWindow) "--" else String.format(Locale.US, "%s%,.2f (%s%.2f%%)", oiSignStr, regimeState.oiDeltaContracts, oiSignStr, regimeState.oiDeltaPercent)
         DataRow(
             label = "OI Delta (Contracts)",
             value = oiValueStr,
@@ -1461,20 +1531,20 @@ fun OiFlowRegimeCard(
                 DebugRow("Buffer Status", debug.bufferStatus, if (debug.bufferStatus == "READY") GreenPositive else Color.Gray)
 
                 DebugHeader("CURRENT VALUES")
-                DebugRow("Current Price", String.format("$%.5f", debug.currentPrice))
-                DebugRow("Anchor Price", String.format("$%.5f", debug.anchorPrice))
-                DebugRow("Current OI", String.format("%,.0f", debug.currentOi))
-                DebugRow("Anchor OI", String.format("%,.0f", debug.anchorOi))
+                DebugRow("Current Price", String.format(Locale.US, "$%.5f", debug.currentPrice))
+                DebugRow("Anchor Price", String.format(Locale.US, "$%.5f", debug.anchorPrice))
+                DebugRow("Current OI", String.format(Locale.US, "%,.0f", debug.currentOi))
+                DebugRow("Anchor OI", String.format(Locale.US, "%,.0f", debug.anchorOi))
 
                 DebugHeader("CALCULATED VALUES")
-                DebugRow("Price Delta", String.format("%+.5f", debug.priceDelta))
-                DebugRow("Price Delta %", String.format("%+.2f%%", debug.priceDeltaPercent))
-                DebugRow("OI Delta", String.format("%+,.0f", debug.oiDelta))
-                DebugRow("OI Delta %", String.format("%+.2f%%", debug.oiDeltaPercent))
+                DebugRow("Price Delta", String.format(Locale.US, "%+.5f", debug.priceDelta))
+                DebugRow("Price Delta %", String.format(Locale.US, "%+.2f%%", debug.priceDeltaPercent))
+                DebugRow("OI Delta", String.format(Locale.US, "%+,.0f", debug.oiDelta))
+                DebugRow("OI Delta %", String.format(Locale.US, "%+.2f%%", debug.oiDeltaPercent))
 
                 DebugHeader("THRESHOLD ENGINE")
-                DebugRow("Price Threshold", String.format("Req 0.15%% | Actual: %.2f%%", abs(debug.priceDeltaPercent)), if (debug.priceThresholdPass) GreenPositive else CoralNegative, if (debug.priceThresholdPass) "PASS" else "FAIL")
-                DebugRow("OI Threshold", String.format("Req 0.25%% | Actual: %.2f%%", abs(debug.oiDeltaPercent)), if (debug.oiThresholdPass) GreenPositive else CoralNegative, if (debug.oiThresholdPass) "PASS" else "FAIL")
+                DebugRow("Price Threshold", String.format(Locale.US, "Req 0.15%% | Actual: %.2f%%", abs(debug.priceDeltaPercent)), if (debug.priceThresholdPass) GreenPositive else CoralNegative, if (debug.priceThresholdPass) "PASS" else "FAIL")
+                DebugRow("OI Threshold", String.format(Locale.US, "Req 0.25%% | Actual: %.2f%%", abs(debug.oiDeltaPercent)), if (debug.oiThresholdPass) GreenPositive else CoralNegative, if (debug.oiThresholdPass) "PASS" else "FAIL")
                 DebugRow("Overall Result", if (debug.overallThresholdPass) "PASS" else "FAIL", if (debug.overallThresholdPass) GreenPositive else CoralNegative)
 
                 DebugHeader("REGIME ENGINE DEBUG")
@@ -1487,7 +1557,7 @@ fun OiFlowRegimeCard(
                 DebugRow("Total Score / Strength", "${debug.totalScore} [${regimeState.strength}]", regimeState.strengthColor)
 
                 DebugHeader("CVD CONFIRMED / DIVERGENCE DEBUG")
-                DebugRow("Current CVD", String.format("%+,.0f", debug.currentCvd))
+                DebugRow("Current CVD", String.format(Locale.US, "%+,.0f", debug.currentCvd))
                 DebugRow("CVD Direction", debug.cvdDirection)
                 DebugRow("Confirmation Result", regimeState.confirmation ?: "NONE")
 
@@ -1581,7 +1651,7 @@ fun PositioningRatioCard(
                 val splitText = if (totalVol > 0.0) {
                     val buyPct = (buyVol / totalVol) * 100.0
                     val sellPct = (sellVol / totalVol) * 100.0
-                    String.format("(%.1f%% / %.1f%%)", buyPct, sellPct)
+                    String.format(Locale.US, "(%.1f%% / %.1f%%)", buyPct, sellPct)
                 } else "(50.0% / 50.0%)"
 
                 Row(
@@ -1593,7 +1663,7 @@ fun PositioningRatioCard(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(splitText, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(String.format("%.4f", ratioVal), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = ratioColor)
+                        Text(String.format(Locale.US, "%.4f", ratioVal), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = ratioColor)
                     }
                 }
             }
@@ -1601,15 +1671,15 @@ fun PositioningRatioCard(
             // Row 3: Global Account L/S
             if (latestRetail != null) {
                 val globalRatio = latestRetail.longShortRatio.toDoubleOrNull() ?: 0.0
-                DataRow("Global Account L/S", String.format("%.4f", globalRatio))
+                DataRow("Global Account L/S", String.format(Locale.US, "%.4f", globalRatio))
 
                 // Row 4: Retail Longs
                 val retailLongs = (latestRetail.longAccount.toDoubleOrNull() ?: 0.0) * 100.0
-                DataRow("Retail Longs", String.format("%.2f%%", retailLongs), GreenPositive)
+                DataRow("Retail Longs", String.format(Locale.US, "%.2f%%", retailLongs), GreenPositive)
 
                 // Row 5: Retail Shorts
                 val retailShorts = (latestRetail.shortAccount.toDoubleOrNull() ?: 0.0) * 100.0
-                DataRow("Retail Shorts", String.format("%.2f%%", retailShorts), CoralNegative)
+                DataRow("Retail Shorts", String.format(Locale.US, "%.2f%%", retailShorts), CoralNegative)
             }
         } else {
             Text("Positioning ratio data loading...", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1708,8 +1778,8 @@ fun OrderBookImbalanceCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            DataRow("Total Depth Bids", String.format("%,.2f Vol", imbalance.bidVolume), GreenPositive)
-            DataRow("Total Depth Asks", String.format("%,.2f Vol", imbalance.askVolume), CoralNegative)
+            DataRow("Total Depth Bids", String.format(Locale.US, "%,.2f Vol", imbalance.bidVolume), GreenPositive)
+            DataRow("Total Depth Asks", String.format(Locale.US, "%,.2f Vol", imbalance.askVolume), CoralNegative)
         } else {
             Text("Order book depth loading...", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -1725,8 +1795,8 @@ fun OrderBookImbalanceBar(bidPct: Float, askPct: Float) {
             modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(text = String.format("Bids %.2f%%", bidPct), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GreenPositive)
-            Text(text = String.format("Asks %.2f%%", askPct), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CoralNegative)
+            Text(text = String.format(Locale.US, "Bids %.2f%%", bidPct), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GreenPositive)
+            Text(text = String.format(Locale.US, "Asks %.2f%%", askPct), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CoralNegative)
         }
 
         Box(
@@ -1775,7 +1845,7 @@ fun MultiTierPositioningCard(
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Retail L/S Ratio", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(String.format("%.2f", matrix.retailRatio), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text(String.format(Locale.US, "%.2f", matrix.retailRatio), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.width(6.dp))
                     SentimentChip(sentiment = matrix.retailSentiment)
                 }
@@ -1784,7 +1854,7 @@ fun MultiTierPositioningCard(
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Whale Account L/S", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(String.format("%.2f", matrix.whaleAccountRatio), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text(String.format(Locale.US, "%.2f", matrix.whaleAccountRatio), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.width(6.dp))
                     SentimentChip(sentiment = matrix.whaleAccountSentiment)
                 }
@@ -1793,7 +1863,7 @@ fun MultiTierPositioningCard(
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Whale Position L/S", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(String.format("%.2f", matrix.whalePositionRatio), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text(String.format(Locale.US, "%.2f", matrix.whalePositionRatio), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.width(6.dp))
                     SentimentChip(sentiment = matrix.whalePositionSentiment)
                 }
@@ -1821,10 +1891,10 @@ fun LocalAggressionCard(
         onMoveDown = onMoveDown
     ) {
         if (activeCandle != null) {
-            DataRow("Taker Buy Vol", String.format("%,.2f", activeCandle.takerBuyVolume))
-            DataRow("Taker Sell Vol", String.format("%,.2f", activeCandle.takerSellVolume))
+            DataRow("Taker Buy Vol", String.format(Locale.US, "%,.2f", activeCandle.takerBuyVolume))
+            DataRow("Taker Sell Vol", String.format(Locale.US, "%,.2f", activeCandle.takerSellVolume))
             val deltaColor = if (activeCandle.volumeDelta > 0) GreenPositive else CoralNegative
-            DataRow("Volume Delta", String.format("%,.2f", activeCandle.volumeDelta), deltaColor)
+            DataRow("Volume Delta", String.format(Locale.US, "%,.2f", activeCandle.volumeDelta), deltaColor)
             val isDump = activeCandle.isBearishExpansion
             DataRow("Structure", if (isDump) "AGGRESSIVE DUMP (>2%)" else "STANDARD ACTION", if (isDump) CoralNegative else Color.Gray)
         } else {
@@ -1852,8 +1922,8 @@ fun OpenInterestCard(
         if (latestOI != null) {
             val totalOiStr = latestOI.sumOpenInterest.toDoubleOrNull() ?: 0.0
             val notionalStr = latestOI.sumOpenInterestValue.toDoubleOrNull() ?: 0.0
-            DataRow("Total OI (Contracts)", String.format("%,.2f", totalOiStr))
-            DataRow("Notional Value ($)", String.format("$%,.2f", notionalStr))
+            DataRow("Total OI (Contracts)", String.format(Locale.US, "%,.2f", totalOiStr))
+            DataRow("Notional Value ($)", String.format(Locale.US, "$%,.2f", notionalStr))
 
             Spacer(modifier = Modifier.height(16.dp))
             val oiHistory = openInterest.mapNotNull { it.sumOpenInterest.toDoubleOrNull() }
@@ -1897,7 +1967,7 @@ fun CvdCard(
         if (cvdHistory.isNotEmpty()) {
             val currentCvd = cvdHistory.last()
             val cvdColor = if (currentCvd > 0) GreenPositive else CoralNegative
-            DataRow("Net Session Aggression", String.format("%,.2f", currentCvd), cvdColor)
+            DataRow("Net Session Aggression", String.format(Locale.US, "%,.2f", currentCvd), cvdColor)
 
             Spacer(modifier = Modifier.height(16.dp))
             SparklineChart(

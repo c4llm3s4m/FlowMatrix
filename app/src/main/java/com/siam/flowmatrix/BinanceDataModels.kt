@@ -2,6 +2,7 @@ package com.siam.flowmatrix
 
 import androidx.compose.ui.graphics.Color
 import kotlinx.serialization.Serializable
+import java.util.Locale
 import kotlin.math.abs
 
 @Serializable
@@ -104,6 +105,38 @@ data class PositioningMatrix(
             else -> SentimentTag.NEUTRAL
         }
 }
+
+// Timeframe-Aware Threshold Scaler for Wyckoff Effort vs Result Mechanics
+data class TimeframeThresholds(
+    val timeframe: String,
+    val absorptionMaxPricePct: Double,
+    val vacuumMinPricePct: Double,
+    val deltaTriggerPct: Double,
+    val tfScaleFactor: Double
+) {
+    val activeThresholdsLabel: String
+        get() = "$timeframe: Abs <=${String.format(Locale.US, "%.2f", absorptionMaxPricePct)}% | Vac >=${String.format(Locale.US, "%.2f", vacuumMinPricePct)}%"
+
+    companion object {
+        fun getThresholds(timeframe: String): TimeframeThresholds = when (timeframe) {
+            "1m" -> TimeframeThresholds("1m", absorptionMaxPricePct = 0.03, vacuumMinPricePct = 0.20, deltaTriggerPct = 15.0, tfScaleFactor = 1.0)
+            "5m" -> TimeframeThresholds("5m", absorptionMaxPricePct = 0.07, vacuumMinPricePct = 0.45, deltaTriggerPct = 14.0, tfScaleFactor = 2.2)
+            "15m" -> TimeframeThresholds("15m", absorptionMaxPricePct = 0.12, vacuumMinPricePct = 0.75, deltaTriggerPct = 12.0, tfScaleFactor = 3.8)
+            "1h" -> TimeframeThresholds("1h", absorptionMaxPricePct = 0.22, vacuumMinPricePct = 1.50, deltaTriggerPct = 10.0, tfScaleFactor = 7.5)
+            else -> TimeframeThresholds("5m", absorptionMaxPricePct = 0.07, vacuumMinPricePct = 0.45, deltaTriggerPct = 14.0, tfScaleFactor = 2.2)
+        }
+    }
+}
+
+// Per-Timeframe Order Flow Snapshot for Window-Commit Memory Buffers (V3 Engine)
+data class OrderFlowSnapshot(
+    val timestampMs: Long,
+    val regime: String,
+    val effortRatio: Double,
+    val normalizedEfficiency: Double,
+    val deltaPct: Double,
+    val priceDeltaPct: Double
+)
 
 // 6. Dashboard Telemetry Card Types for Custom Ordering & Persistence (11 Cards Total)
 enum class TelemetryCardType(val id: String, val title: String) {
@@ -235,7 +268,7 @@ enum class WsConnectionStage {
     DISCONNECTED
 }
 
-// 13. Order Flow Regime Diagnostics / Debug State Model (Full Diagnostics Pipeline)
+// 13. Order Flow Regime Diagnostics / Debug State Model (Full Diagnostics Pipeline with Wyckoff V3 Metrics)
 data class OrderFlowRegimeDebugState(
     val isDebugEnabled: Boolean = false,
     val connectionStage: WsConnectionStage = WsConnectionStage.DISCONNECTED,
@@ -263,11 +296,28 @@ data class OrderFlowRegimeDebugState(
     val sellVolume: Double = 0.0,
     val netDelta: Double = 0.0,
     val deltaPercent: Double = 0.0,
+    val effortRatio: Double = 1.0,
+    val effortLevel: String = "MODERATE",
+    val resultLevel: String = "MODERATE",
+    val priceEfficiency: Double = 0.0,
+    val flowEfficiency: Double = 0.0,
+    val efficiencyState: String = "NORMAL_AUCTION",
+    val activeThresholdsLabel: String = "5m: Abs <=0.07% | Vac >=0.45%",
+    val currentRegime: String = "BALANCED FLOW",
+    val previousRegime: String? = null,
+    val persistenceCount: Int = 1,
+    val persistenceState: String = "FRESH",
+    val absorptionStreak: Int = 0,
+    val expansionStreak: Int = 0,
+    val vacuumStreak: Int = 0,
+    val defenseState: String = "NONE",
+    val bullishRegimeScore: Int = 0,
+    val bearishRegimeScore: Int = 0,
     val parseFailuresCount: Long = 0L,
     val warnings: List<String> = emptyList()
 )
 
-// 14. Order Flow Regime State Model (Live WS Stream Engine with Debug State)
+// 14. Order Flow Regime State Model (Live WS Stream Engine V3)
 data class OrderFlowRegimeState(
     val regime: String = "BALANCED FLOW",
     val badgeColor: Color = Color(0xFF9CA3AF),
@@ -277,6 +327,17 @@ data class OrderFlowRegimeState(
     val deltaPercent: Double = 0.0,
     val priceDeltaPercent: Double = 0.0,
     val totalVolume: Double = 0.0,
+    val effortLevel: String = "MODERATE",
+    val resultLevel: String = "MODERATE",
+    val effortRatio: Double = 1.0,
+    val priceEfficiency: Double = 0.0,
+    val flowEfficiency: Double = 0.0,
+    val efficiencyState: String = "NORMAL_AUCTION",
+    val mechanicsSummary: String = "Order flow and price movement balanced within normal thresholds",
+    val activeThresholdsLabel: String = "5m: Abs <=0.07% | Vac >=0.45%",
+    val persistenceCount: Int = 1,
+    val persistenceState: String = "FRESH",
+    val defenseState: String = "NONE",
     val buildingWindow: Boolean = true,
     val debugState: OrderFlowRegimeDebugState = OrderFlowRegimeDebugState()
 )
