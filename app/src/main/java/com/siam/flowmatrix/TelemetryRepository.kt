@@ -46,12 +46,19 @@ object TelemetryRepository {
     // Wyckoff Effort vs Result Rolling Window Volume Buffer (max size 20)
     private val volumeHistoryBuffer = ArrayDeque<Double>()
 
-    // Order Flow V3: Independent Per-Timeframe Window-Commit Memory Buffers (max size 10)
+    // Order Flow V3.5: Independent Per-Timeframe Window-Commit Memory Buffers (max size 10)
     private val tfWindowBuffers = mapOf(
         "1m" to ArrayDeque<OrderFlowSnapshot>(),
         "5m" to ArrayDeque<OrderFlowSnapshot>(),
         "15m" to ArrayDeque<OrderFlowSnapshot>(),
         "1h" to ArrayDeque<OrderFlowSnapshot>()
+    )
+
+    private val dirEffBuffers = mapOf(
+        "1m" to ArrayDeque<Double>(),
+        "5m" to ArrayDeque<Double>(),
+        "15m" to ArrayDeque<Double>(),
+        "1h" to ArrayDeque<Double>()
     )
 
     private val tfLastCommitMs = mutableMapOf(
@@ -60,6 +67,11 @@ object TelemetryRepository {
         "15m" to 0L,
         "1h" to 0L
     )
+
+    private val lastNonBalancedRegimes = mutableMapOf<String, String>()
+    private val transitionSignalMap = mutableMapOf<String, String>()
+    private val transitionTextMap = mutableMapOf<String, String>()
+    private val transitionHoldCountMap = mutableMapOf<String, Int>()
 
     // Consensus Memory Engine State
     private var memoryLastConsensus: String? = null
@@ -285,7 +297,7 @@ object TelemetryRepository {
         val oiStrength = oiState.strength.uppercase()
         val cvdConfirm = oiState.confirmation
 
-        // --- INVENTORY VS FLOW CONFLICT DETECTOR (BUG FIX 2: SYNCHRONIZED BOOLEANS) ---
+        // --- INVENTORY VS FLOW CONFLICT DETECTOR (SYNCHRONIZED BOOLEANS) ---
         val inventoryIncreasing = smpeState.regime in listOf("ACCUMULATION", "SPONSORED_RALLY") || smpeState.longCapitalDeltaPct >= 0.50
         val inventoryDecreasing = smpeState.regime in listOf("DISTRIBUTION", "ABANDONMENT") || smpeState.longCapitalDeltaPct <= -0.50
 
@@ -589,7 +601,7 @@ object TelemetryRepository {
         )
     }
 
-    // --- PHASE 4, 4.5 & WYCKOFF V3 EFFORT VS RESULT ENGINE ---
+    // --- PHASE 4, 4.5 & WYCKOFF V3.5 EFFORT VS RESULT ENGINE ---
     private fun processLiveTradeSnapshot(trade: TradeSnapshot) {
         tradeSnapshotBuffer.addLast(trade)
 
@@ -649,6 +661,18 @@ object TelemetryRepository {
         // Timeframe-Normalized Flow Efficiency
         val normalizedPriceDelta = abs(priceDeltaPct) / thresholds.tfScaleFactor
         val flowEfficiency = normalizedPriceDelta / kotlin.math.max(abs(deltaPct), 1.0)
+
+        // Directional (Signed) Efficiency
+        val deltaSign = if (deltaPct > 0.0) 1.0 else if (deltaPct < 0.0) -1.0 else 0.0
+        val directionalEfficiency = if (deltaSign != 0.0) {
+            (priceDeltaPct * deltaSign) / (thresholds.tfScaleFactor * kotlin.math.max(abs(deltaPct), 1.0))
+        } else 0.0
+
+        val efficiencyBiasStr = when {
+            directionalEfficiency > 0.02 -> "ALIGNED"
+            directionalEfficiency >= 0.0 -> "ABSORBED"
+            else -> "INVERTED"
+        }
 
         val efficiencyState = when {
             flowEfficiency < 0.02 -> "ABSORPTION"
@@ -735,6 +759,7 @@ object TelemetryRepository {
         // Window-Commit Cadence: Commit snapshot once per closed timeframe window
         val lastCommit = tfLastCommitMs[activeTf] ?: 0L
         val activeBuffer = tfWindowBuffers[activeTf] ?: ArrayDeque()
+        val dirEffHist = dirEffBuffers[activeTf] ?: ArrayDeque()
 
         if (!isBuilding && now - lastCommit >= windowDurationMs) {
             activeBuffer.addLast(
@@ -743,6 +768,7 @@ object TelemetryRepository {
                     regime = regimeStr,
                     effortRatio = effortRatio,
                     normalizedEfficiency = flowEfficiency,
+                    directionalEfficiency = directionalEfficiency,
                     deltaPct = deltaPct,
                     priceDeltaPct = priceDeltaPct
                 )
@@ -750,6 +776,40 @@ object TelemetryRepository {
             while (activeBuffer.size > 10) {
                 activeBuffer.removeFirst()
             }
+
+            dirEffHist.addLast(directionalEfficiency)
+            while (dirEffHist.size > 10) {
+                dirEffHist.removeFirst()
+            }
+
+            // Named Regime Transition Engine
+            val lastNonBal = lastNonBalancedRegimes[activeTf]
+            if (regimeStr != "BALANCED FLOW" && lastNonBal != null && lastNonBal != regimeStr) {
+                val (tSig, tTxt) = when {
+                    lastNonBal == "ASK ABSORPTION" && regimeStr == "THIN-ASK DRIFT" -> "BREAKOUT_RELEASE" to "Passive overhead supply exhausted"
+                    lastNonBal == "BID ABSORPTION" && regimeStr == "THIN-BID DROP" -> "SUPPORT_FAILURE" to "Passive bid support withdrawn"
+                    lastNonBal == "SHORT TRAP" && regimeStr == "EXPANSIVE BUYING" -> "SQUEEZE_IGNITION" to "Trapped shorts fueling initiative buying"
+                    lastNonBal == "LONG TRAP" && regimeStr == "EXPANSIVE SELLING" -> "CASCADE_IGNITION" to "Trapped longs fueling cascading supply"
+                    else -> "NONE" to "NONE"
+                }
+                if (tSig != "NONE") {
+                    transitionSignalMap[activeTf] = tSig
+                    transitionTextMap[activeTf] = tTxt
+                    transitionHoldCountMap[activeTf] = 2 // Hold for 2 closed windows
+                }
+            } else if ((transitionHoldCountMap[activeTf] ?: 0) > 0) {
+                val remaining = (transitionHoldCountMap[activeTf] ?: 1) - 1
+                transitionHoldCountMap[activeTf] = remaining
+                if (remaining == 0) {
+                    transitionSignalMap[activeTf] = "NONE"
+                    transitionTextMap[activeTf] = "NONE"
+                }
+            }
+
+            if (regimeStr != "BALANCED FLOW") {
+                lastNonBalancedRegimes[activeTf] = regimeStr
+            }
+
             tfLastCommitMs[activeTf] = now
         }
 
@@ -765,12 +825,22 @@ object TelemetryRepository {
             }
         }
 
-        // Check if effortRatio or flowEfficiency is falling over last 3 closed windows
-        val isExhausting = activeBuffer.size >= 3 && run {
-            val last3 = activeBuffer.takeLast(3)
-            (last3[0].effortRatio > last3[1].effortRatio && last3[1].effortRatio > last3[2].effortRatio) ||
-            (last3[0].normalizedEfficiency > last3[1].normalizedEfficiency && last3[1].normalizedEfficiency > last3[2].normalizedEfficiency)
+        // REGIME MOMENTUM ENGINE (NOISE-GATED)
+        val regimeMomentumStr = if (persistenceCount >= 3 && dirEffHist.size >= 3) {
+            val effSlope = dirEffHist.last() - dirEffHist[dirEffHist.size - 3]
+            val volSlope = if (activeBuffer.size >= 3) activeBuffer.last().effortRatio - activeBuffer[activeBuffer.size - 3].effortRatio else 0.0
+
+            when {
+                persistenceCount >= 6 && effSlope < -0.005 -> "EXHAUSTING ⚠"
+                effSlope > 0.005 || (effSlope >= -0.005 && volSlope > 0.10) -> "STRENGTHENING ↑"
+                effSlope < -0.005 && volSlope <= 0.0 -> "WEAKENING ↓"
+                else -> "STABLE →"
+            }
+        } else {
+            "STABLE →"
         }
+
+        val isExhausting = regimeMomentumStr == "EXHAUSTING ⚠"
 
         val persistenceStateStr = when {
             persistenceCount == 1 -> "FRESH"
@@ -811,6 +881,10 @@ object TelemetryRepository {
 
         val bullScore = activeBuffer.count { it.regime in listOf("EXPANSIVE BUYING", "BID ABSORPTION", "SHORT TRAP", "THIN-ASK DRIFT") }
         val bearScore = activeBuffer.count { it.regime in listOf("EXPANSIVE SELLING", "ASK ABSORPTION", "LONG TRAP", "THIN-BID DROP") }
+
+        val currentTransSignal = transitionSignalMap[activeTf] ?: "NONE"
+        val currentTransText = transitionTextMap[activeTf] ?: "NONE"
+        val currentLastNonBal = lastNonBalancedRegimes[activeTf]
 
         val wsStage = wsManager.tradeStreamStage.value
         val socketUrl = wsManager.tradeSocketUrl.value
@@ -869,6 +943,12 @@ object TelemetryRepository {
             priceEfficiency = priceEfficiency,
             flowEfficiency = flowEfficiency,
             efficiencyState = efficiencyState,
+            directionalEfficiency = directionalEfficiency,
+            efficiencyBias = efficiencyBiasStr,
+            regimeMomentum = regimeMomentumStr,
+            lastNonBalancedRegime = currentLastNonBal,
+            transitionSignal = currentTransSignal,
+            transitionText = currentTransText,
             activeThresholdsLabel = thresholds.activeThresholdsLabel,
             currentRegime = regimeStr,
             previousRegime = previousRegimeStr,
@@ -899,6 +979,11 @@ object TelemetryRepository {
             priceEfficiency = priceEfficiency,
             flowEfficiency = flowEfficiency,
             efficiencyState = efficiencyState,
+            directionalEfficiency = directionalEfficiency,
+            efficiencyBias = efficiencyBiasStr,
+            regimeMomentum = regimeMomentumStr,
+            transitionSignal = currentTransSignal,
+            transitionText = currentTransText,
             mechanicsSummary = mechanicsSummaryStr,
             activeThresholdsLabel = thresholds.activeThresholdsLabel,
             persistenceCount = persistenceCount,
@@ -956,7 +1041,12 @@ object TelemetryRepository {
 
         // Clear all 4 timeframe window-commit memory buffers on symbol switch
         tfWindowBuffers.values.forEach { it.clear() }
+        dirEffBuffers.values.forEach { it.clear() }
         tfLastCommitMs.keys.forEach { tfLastCommitMs[it] = 0L }
+        lastNonBalancedRegimes.clear()
+        transitionSignalMap.clear()
+        transitionTextMap.clear()
+        transitionHoldCountMap.clear()
 
         memoryLastConsensus = null
         memoryLastNarrative = null

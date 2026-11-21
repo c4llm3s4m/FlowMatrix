@@ -128,12 +128,13 @@ data class TimeframeThresholds(
     }
 }
 
-// Per-Timeframe Order Flow Snapshot for Window-Commit Memory Buffers (V3 Engine)
+// Per-Timeframe Order Flow Snapshot for Window-Commit Memory Buffers (V3.5 Engine)
 data class OrderFlowSnapshot(
     val timestampMs: Long,
     val regime: String,
     val effortRatio: Double,
     val normalizedEfficiency: Double,
+    val directionalEfficiency: Double,
     val deltaPct: Double,
     val priceDeltaPct: Double
 )
@@ -268,7 +269,7 @@ enum class WsConnectionStage {
     DISCONNECTED
 }
 
-// 13. Order Flow Regime Diagnostics / Debug State Model (Full Diagnostics Pipeline with Wyckoff V3 Metrics)
+// 13. Order Flow Regime Diagnostics / Debug State Model (Full Diagnostics Pipeline with Wyckoff V3.5 Metrics)
 data class OrderFlowRegimeDebugState(
     val isDebugEnabled: Boolean = false,
     val connectionStage: WsConnectionStage = WsConnectionStage.DISCONNECTED,
@@ -302,6 +303,12 @@ data class OrderFlowRegimeDebugState(
     val priceEfficiency: Double = 0.0,
     val flowEfficiency: Double = 0.0,
     val efficiencyState: String = "NORMAL_AUCTION",
+    val directionalEfficiency: Double = 0.0,
+    val efficiencyBias: String = "ALIGNED",
+    val regimeMomentum: String = "STABLE →",
+    val lastNonBalancedRegime: String? = null,
+    val transitionSignal: String = "NONE",
+    val transitionText: String = "NONE",
     val activeThresholdsLabel: String = "5m: Abs <=0.07% | Vac >=0.45%",
     val currentRegime: String = "BALANCED FLOW",
     val previousRegime: String? = null,
@@ -317,7 +324,7 @@ data class OrderFlowRegimeDebugState(
     val warnings: List<String> = emptyList()
 )
 
-// 14. Order Flow Regime State Model (Live WS Stream Engine V3)
+// 14. Order Flow Regime State Model (Live WS Stream Engine V3.5)
 data class OrderFlowRegimeState(
     val regime: String = "BALANCED FLOW",
     val badgeColor: Color = Color(0xFF9CA3AF),
@@ -333,6 +340,11 @@ data class OrderFlowRegimeState(
     val priceEfficiency: Double = 0.0,
     val flowEfficiency: Double = 0.0,
     val efficiencyState: String = "NORMAL_AUCTION",
+    val directionalEfficiency: Double = 0.0,
+    val efficiencyBias: String = "ALIGNED",
+    val regimeMomentum: String = "STABLE →",
+    val transitionSignal: String = "NONE",
+    val transitionText: String = "NONE",
     val mechanicsSummary: String = "Order flow and price movement balanced within normal thresholds",
     val activeThresholdsLabel: String = "5m: Abs <=0.07% | Vac >=0.45%",
     val persistenceCount: Int = 1,

@@ -1130,7 +1130,7 @@ fun FlowConsensusCard(
     }
 }
 
-// Wyckoff Effort vs Result Order Flow Regime Card V3
+// Wyckoff Effort vs Result Order Flow Regime Card V3.5
 @Composable
 fun OrderFlowRegimeCard(
     regimeState: OrderFlowRegimeState,
@@ -1208,34 +1208,39 @@ fun OrderFlowRegimeCard(
             modifier = Modifier.padding(bottom = 4.dp)
         )
 
-        // ROW 3: Persistence Engine
+        // ROW 3: Merged Persistence & Momentum Row
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("Persistence", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val momColor = when {
+                regimeState.regimeMomentum.contains("STRENGTHENING") -> GreenPositive
+                regimeState.regimeMomentum.contains("EXHAUSTING") -> CoralNegative
+                else -> GoldNeutral
+            }
             Text(
-                text = "${regimeState.persistenceState} (${regimeState.persistenceCount} ${if (regimeState.persistenceCount == 1) "window" else "windows"})",
+                text = "${regimeState.persistenceState} (${regimeState.persistenceCount}w) • ${regimeState.regimeMomentum}",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
+                color = momColor
             )
         }
 
-        // ROW 4: Defense State
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("Defense State", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            val defColor = when (regimeState.defenseState) {
-                "ACTIVE_BID_DEFENSE" -> GreenPositive
-                "ACTIVE_ASK_DEFENSE" -> CoralNegative
-                else -> Color.Gray
-            }
-            if (regimeState.defenseState != "NONE") {
+        // ROW 4: Defense State (Rendered only when active)
+        if (regimeState.defenseState != "NONE") {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Defense State", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val defColor = when (regimeState.defenseState) {
+                    "ACTIVE_BID_DEFENSE" -> GreenPositive
+                    "ACTIVE_ASK_DEFENSE" -> CoralNegative
+                    else -> Color.Gray
+                }
                 Surface(
                     color = defColor.copy(alpha = 0.15f),
                     shape = RoundedCornerShape(12.dp)
@@ -1248,28 +1253,49 @@ fun OrderFlowRegimeCard(
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                     )
                 }
-            } else {
-                Text("NONE", fontSize = 12.sp, color = Color.Gray)
+            }
+        }
+
+        // ROW 5: Transition Signal (Rendered ONLY when transitionSignal != "NONE")
+        if (regimeState.transitionSignal != "NONE") {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Transition", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Surface(
+                    color = GoldNeutral.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = "${regimeState.transitionSignal} (${regimeState.transitionText})",
+                        color = GoldNeutral,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
             }
         }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-        // ROW 5: Buy Volume
+        // ROW 6: Buy Volume
         DataRow(
             label = "Buy Volume ($interval)",
             value = String.format(Locale.US, "%,.2f Vol", regimeState.buyVolume),
             valueColor = GreenPositive
         )
 
-        // ROW 6: Sell Volume
+        // ROW 7: Sell Volume
         DataRow(
             label = "Sell Volume ($interval)",
             value = String.format(Locale.US, "%,.2f Vol", regimeState.sellVolume),
             valueColor = CoralNegative
         )
 
-        // ROW 7: Net Delta
+        // ROW 8: Net Delta
         val deltaColor = if (regimeState.netDelta > 0) GreenPositive else if (regimeState.netDelta < 0) CoralNegative else MaterialTheme.colorScheme.onSurface
         DataRow(
             label = "Net Delta",
@@ -1277,14 +1303,14 @@ fun OrderFlowRegimeCard(
             valueColor = deltaColor
         )
 
-        // ROW 8: Delta %
+        // ROW 9: Delta %
         DataRow(
             label = "Delta %",
             value = String.format(Locale.US, "%+.2f%%", regimeState.deltaPercent),
             valueColor = deltaColor
         )
 
-        // ROW 9: Dynamic Timeframe Price Delta %
+        // ROW 10: Dynamic Timeframe Price Delta %
         val priceColor = if (regimeState.priceDeltaPercent > 0) GreenPositive else if (regimeState.priceDeltaPercent < 0) CoralNegative else MaterialTheme.colorScheme.onSurface
         DataRow(
             label = "Price Delta % ($interval)",
@@ -1292,14 +1318,14 @@ fun OrderFlowRegimeCard(
             valueColor = priceColor
         )
 
-        // --- WYCKOFF V3 DIAGNOSTICS & DEBUG SECTION ---
+        // --- WYCKOFF V3.5 DIAGNOSTICS & DEBUG SECTION ---
         if (debug.isDebugEnabled) {
             Spacer(modifier = Modifier.height(8.dp))
             HorizontalDivider(color = GoldNeutral.copy(alpha = 0.4f))
             Spacer(modifier = Modifier.height(8.dp))
 
             Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("🛠 ORDER FLOW & WYCKOFF V3 DIAGNOSTICS", fontSize = 11.sp, fontWeight = FontWeight.Black, color = GoldNeutral)
+                Text("🛠 ORDER FLOW & WYCKOFF V3.5 DIAGNOSTICS", fontSize = 11.sp, fontWeight = FontWeight.Black, color = GoldNeutral)
 
                 // VALIDATION WARNING BANNERS
                 debug.warnings.forEach { warning ->
@@ -1323,12 +1349,16 @@ fun OrderFlowRegimeCard(
                 DebugRow("Effort Ratio (vs 20-bar)", String.format(Locale.US, "%.2fx [%s]", debug.effortRatio, debug.effortLevel))
                 DebugRow("Price Efficiency", String.format(Locale.US, "%+.2f%%", debug.priceEfficiency))
                 DebugRow("Normalized Flow Efficiency", String.format(Locale.US, "%.4f [%s]", debug.flowEfficiency, debug.efficiencyState))
+                DebugRow("Directional Efficiency", String.format(Locale.US, "%+.4f [%s]", debug.directionalEfficiency, debug.efficiencyBias))
+                DebugRow("Regime Momentum", debug.regimeMomentum)
                 DebugRow("Delta % Check", String.format(Locale.US, "Actual %+.2f%%", debug.deltaPercent))
                 DebugRow("Price Delta Check", String.format(Locale.US, "Actual %+.2f%%", regimeState.priceDeltaPercent))
 
                 DebugHeader("PERSISTENCE & STREAKS (WINDOW-COMMIT)")
                 DebugRow("Current Regime", debug.currentRegime)
                 DebugRow("Previous Regime", debug.previousRegime ?: "NONE")
+                DebugRow("Last Non-Balanced Regime", debug.lastNonBalancedRegime ?: "NONE")
+                DebugRow("Transition Signal", if (debug.transitionSignal != "NONE") "${debug.transitionSignal} (${debug.transitionText})" else "NONE")
                 DebugRow("Persistence Count", "${debug.persistenceCount} [${debug.persistenceState}]")
                 DebugRow("Streaks (Abs/Exp/Vac)", "Abs: ${debug.absorptionStreak} | Exp: ${debug.expansionStreak} | Vac: ${debug.vacuumStreak}")
                 DebugRow("Defense State", debug.defenseState)
