@@ -274,7 +274,7 @@ object TelemetryRepository {
         }
     }
 
-    // --- PHASE 5, 6 & WYCKOFF V3 ENGINE: DUAL ENGINE CONSENSUS, TRAP DETECTION, ABSORPTION & SMPE OVERRIDE ENGINE ---
+    // --- V3 FLOW CONSENSUS ENGINE: INTENT ENGINE, UNIFIED 0-100% CONFIDENCE & SMPE OVERRIDES ---
     private fun evaluateFlowConsensus(
         oiState: OIFlowRegimeState,
         ofState: OrderFlowRegimeState,
@@ -298,6 +298,45 @@ object TelemetryRepository {
             flowBuying && inventoryIncreasing -> "CONFIRMED EXPANSION" to "STRONG BULLISH"
             flowSelling && inventoryDecreasing -> "CONFIRMED DISTRIBUTION" to "STRONG BEARISH"
             else -> "ALIGNED / BALANCED" to "NEUTRAL"
+        }
+
+        // --- V3 INTENT ENGINE RULES ---
+        val (intentKey, intentColor, intentDesc) = when {
+            (ofRegime == "THIN-ASK DRIFT" || ofRegime == "EXPANSIVE BUYING") && oiRegime == "SHORT COVERING" -> Triple(
+                "SHORT SQUEEZE",
+                Color(0xFF22C55E), // Green
+                "Forced short covering driving upside squeeze."
+            )
+            (ofRegime == "THIN-BID DROP" || ofRegime == "EXPANSIVE SELLING") && oiRegime == "LONG LIQUIDATIONS" -> Triple(
+                "LONG LIQUIDATION",
+                Color(0xFFEF4444), // Red
+                "Forced long liquidations driving downside cascade."
+            )
+            (ofRegime == "ASK ABSORPTION" && oiRegime == "NEW LONGS") || ofRegime == "LONG TRAP" -> Triple(
+                "BULL TRAP FORMING",
+                Color(0xFFFF9100), // Amber
+                "Fresh longs absorbed into overhead supply."
+            )
+            (ofRegime == "BID ABSORPTION" && oiRegime == "NEW SHORTS") || ofRegime == "SHORT TRAP" -> Triple(
+                "BEAR TRAP FORMING",
+                Color(0xFF00E5FF), // Cyan
+                "Fresh shorts absorbed by passive buyers."
+            )
+            ofRegime == "EXPANSIVE BUYING" && oiRegime == "NEW LONGS" -> Triple(
+                "INITIATIVE BUYING",
+                Color(0xFF00C853), // Bright Green
+                "New longs driving directional expansion."
+            )
+            ofRegime == "EXPANSIVE SELLING" && oiRegime == "NEW SHORTS" -> Triple(
+                "INITIATIVE SHORTING",
+                Color(0xFFFF5252), // Bright Red
+                "New shorts driving directional expansion."
+            )
+            else -> Triple(
+                "NEUTRAL AUCTION",
+                Color(0xFF9CA3AF),
+                "No dominant directional intent detected."
+            )
         }
 
         // --- PHASE 6: PRIORITY HIERARCHY & CONSENSUS OVERRIDE ---
@@ -432,15 +471,50 @@ object TelemetryRepository {
 
         val prevAgeStr = if (memoryLastTimestampMs != null) formatAge(now - memoryLastTimestampMs!!) else null
 
-        var score = 0
-        if (oiStrength == "HIGH") score += 2 else if (oiStrength == "MEDIUM") score += 1
-        if (flowBuying || flowSelling) score += 2
-        if (cvdConfirm == "CVD CONFIRMED") score += 2 else if (cvdConfirm == "DIVERGENCE") score -= 1
-        if (isSmpeOverride || isBullishAbsorptionTrap || isBearishDistributionWall) score += 2
+        // --- V3 UNIFIED CONFIDENCE ENGINE (0-100%, SMPE-PRIORITY WEIGHTING) ---
+        // 1. SMPE Score (up to 30 pts)
+        val smpeScore = when {
+            smpeState.regime in listOf("SPONSORED_RALLY", "ACCUMULATION", "DISTRIBUTION", "ABANDONMENT") -> {
+                val isSmpeBullish = smpeState.regime in listOf("SPONSORED_RALLY", "ACCUMULATION")
+                if ((isSmpeBullish && flowBuying) || (!isSmpeBullish && flowSelling)) 30 else 15
+            }
+            smpeState.dominance in listOf("BULL DOMINANCE", "BEAR DOMINANCE", "STRONG BULL DOMINANCE", "SPONSORED RALLY", "EXTREME SPONSORSHIP") -> 20
+            else -> 10
+        }
+
+        // 2. OI Regime Score (up to 25 pts)
+        val oiScore = when {
+            oiRegime in listOf("NEW LONGS", "NEW SHORTS", "SHORT COVERING", "LONG LIQUIDATIONS") -> {
+                val isOiBullish = oiRegime in listOf("NEW LONGS", "SHORT COVERING")
+                if ((isOiBullish && flowBuying) || (!isOiBullish && flowSelling)) 25 else 15
+            }
+            oiRegime == "NEUTRAL" -> 10
+            else -> 5
+        }
+
+        // 3. Order Flow Quality Score (up to 25 pts)
+        val ofScore = when {
+            ofRegime in listOf("EXPANSIVE BUYING", "EXPANSIVE SELLING", "LONG TRAP", "SHORT TRAP") -> 25
+            ofRegime in listOf("BID ABSORPTION", "ASK ABSORPTION") || ofState.defenseState != "NONE" -> 20
+            ofRegime in listOf("THIN-ASK DRIFT", "THIN-BID DROP") -> 15
+            else -> 10
+        }
+
+        // 4. Persistence Strength Score (up to 20 pts)
+        val basePersistenceScore = when {
+            ofState.persistenceCount >= 6 -> 20
+            ofState.persistenceCount in 4..5 -> 15
+            ofState.persistenceCount in 2..3 -> 10
+            else -> 4
+        }
+        val persistencePenalty = if (ofState.persistenceState == "EXHAUSTING") 8 else 0
+        val persistenceScore = kotlin.math.max(0, basePersistenceScore - persistencePenalty)
+
+        val confidencePct = (smpeScore + oiScore + ofScore + persistenceScore).coerceIn(0, 100)
 
         val (confText, confColor) = when {
-            score >= 4 -> "HIGH" to Color(0xFF10B981)
-            score >= 2 -> "MEDIUM" to Color(0xFFEAB308)
+            confidencePct >= 75 -> "HIGH" to Color(0xFF10B981)
+            confidencePct >= 45 -> "MEDIUM" to Color(0xFFEAB308)
             else -> "LOW" to Color(0xFF9CA3AF)
         }
 
@@ -457,13 +531,19 @@ object TelemetryRepository {
             inputSmpeDominance = smpeState.dominance,
             inventoryVsFlowLabel = invVsFlowLabel,
             inventoryVsFlowBias = invVsFlowBias,
-            confidenceScore = score,
+            smpeScore = smpeScore,
+            oiScore = oiScore,
+            ofScore = ofScore,
+            persistenceScore = persistenceScore,
+            totalConfidencePct = confidencePct,
+            intentRuleFired = intentKey,
             ruleFired = ruleName
         )
 
         return FlowConsensusState(
             consensus = candidateConsensus,
             badgeColor = candidateBadgeColor,
+            confidencePct = confidencePct,
             confidence = confText,
             confidenceColor = confColor,
             oiRegimeDisplay = oiRegime,
@@ -471,6 +551,9 @@ object TelemetryRepository {
             narrative = narrativeText,
             inventoryVsFlowLabel = invVsFlowLabel,
             inventoryVsFlowBias = invVsFlowBias,
+            intentState = intentKey,
+            intentColor = intentColor,
+            intentDescription = intentDesc,
             previousConsensus = memoryLastConsensus,
             previousConsensusColor = memoryLastBadgeColor,
             previousNarrative = memoryLastNarrative,

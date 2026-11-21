@@ -881,7 +881,7 @@ fun SmartMoneyPositionCard(
     }
 }
 
-// PHASE 5 & 6: Flow Consensus Engine Card with Memory Engine & Inventory vs Flow Detector
+// V3 Flow Consensus Engine Card with Memory Engine, Inventory vs Flow & Intent Engine
 @Composable
 fun FlowConsensusCard(
     consensusState: FlowConsensusState,
@@ -938,7 +938,7 @@ fun FlowConsensusCard(
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-        // ROW 2: Confidence Badge
+        // ROW 2: Confidence Badge (Unified 0-100% Score Display)
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -950,7 +950,7 @@ fun FlowConsensusCard(
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Text(
-                    text = consensusState.confidence,
+                    text = "${consensusState.confidencePct}% ${consensusState.confidence}",
                     color = consensusState.confidenceColor,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
@@ -993,9 +993,37 @@ fun FlowConsensusCard(
             }
         }
 
-        // ROW 6: Narrative Text Explanation
+        // ROW 6: Intent Row (OI + Order Flow Intent Engine)
         Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Intent", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Surface(
+                color = consensusState.intentColor.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(
+                    text = consensusState.intentState,
+                    color = consensusState.intentColor,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+            }
+        }
+
+        Text(
+            text = consensusState.intentDescription,
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+
+        // ROW 7: Narrative Text Explanation
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.Top
         ) {
@@ -1011,7 +1039,7 @@ fun FlowConsensusCard(
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
 
-        // ROW 7: Last Consensus (Consensus Memory Engine)
+        // ROW 8: Last Consensus (Consensus Memory Engine)
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1040,7 +1068,7 @@ fun FlowConsensusCard(
             }
         }
 
-        // ROW 8: Last Narrative
+        // ROW 9: Last Narrative
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1075,12 +1103,19 @@ fun FlowConsensusCard(
                 DebugRow("Input SMPE Dominance", debug.inputSmpeDominance)
                 DebugRow("Inventory vs Flow Bias", debug.inventoryVsFlowBias)
 
-                DebugHeader("CONFIDENCE ENGINE")
-                DebugRow("Confidence Score", "${debug.confidenceScore}")
-                DebugRow("Confidence Level", consensusState.confidence, consensusState.confidenceColor)
+                DebugHeader("CONFIDENCE ENGINE BREAKDOWN (0-100%)")
+                DebugRow("SMPE Score (/30)", "${debug.smpeScore}")
+                DebugRow("OI Score (/25)", "${debug.oiScore}")
+                DebugRow("Order Flow Score (/25)", "${debug.ofScore}")
+                DebugRow("Persistence Score (/20)", "${debug.persistenceScore}")
+                DebugRow("Total Confidence", "${debug.totalConfidencePct}% [${consensusState.confidence}]", consensusState.confidenceColor)
 
-                DebugHeader("RULE TRIGGERED")
-                DebugRow("Rule Fired", debug.ruleFired, consensusState.badgeColor)
+                DebugHeader("INTENT ENGINE TRACE")
+                DebugRow("Intent State", consensusState.intentState, consensusState.intentColor)
+                DebugRow("Intent Rule Fired", debug.intentRuleFired)
+
+                DebugHeader("CONSENSUS RULE TRIGGERED")
+                DebugRow("Consensus Rule", debug.ruleFired, consensusState.badgeColor)
 
                 DebugHeader("CONSENSUS HISTORY (LAST 5 EVENTS)")
                 if (consensusState.consensusHistory.isNotEmpty()) {

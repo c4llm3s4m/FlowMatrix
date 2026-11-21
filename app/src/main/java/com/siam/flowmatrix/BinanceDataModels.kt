@@ -349,7 +349,7 @@ data class ConsensusHistoryEvent(
     val badgeColor: Color
 )
 
-// 16. Flow Consensus Diagnostics / Debug State Model
+// 16. Flow Consensus Diagnostics / Debug State Model (V3 Engine)
 data class FlowConsensusDebugState(
     val isDebugEnabled: Boolean = false,
     val inputOiRegime: String = "NEUTRAL",
@@ -361,14 +361,20 @@ data class FlowConsensusDebugState(
     val inputSmpeDominance: String = "BALANCED",
     val inventoryVsFlowLabel: String = "ALIGNED / BALANCED",
     val inventoryVsFlowBias: String = "NEUTRAL",
-    val confidenceScore: Int = 0,
+    val smpeScore: Int = 0,
+    val oiScore: Int = 0,
+    val ofScore: Int = 0,
+    val persistenceScore: Int = 0,
+    val totalConfidencePct: Int = 0,
+    val intentRuleFired: String = "NEUTRAL_AUCTION",
     val ruleFired: String = "No rule fired (NEUTRAL)"
 )
 
-// 17. Flow Consensus State Model (Dual Engine Consensus, Memory & SMPE Layer)
+// 17. Flow Consensus State Model (Dual Engine Consensus, Intent & Unified 0-100% Confidence)
 data class FlowConsensusState(
     val consensus: String = "NEUTRAL",
     val badgeColor: Color = Color(0xFF9CA3AF),
+    val confidencePct: Int = 0,
     val confidence: String = "LOW",
     val confidenceColor: Color = Color(0xFF9CA3AF),
     val oiRegimeDisplay: String = "NEUTRAL",
@@ -376,6 +382,9 @@ data class FlowConsensusState(
     val narrative: String = "No dominant market narrative detected.",
     val inventoryVsFlowLabel: String = "ALIGNED / BALANCED",
     val inventoryVsFlowBias: String = "NEUTRAL",
+    val intentState: String = "NEUTRAL AUCTION",
+    val intentColor: Color = Color(0xFF9CA3AF),
+    val intentDescription: String = "No dominant directional intent detected.",
     val previousConsensus: String? = null,
     val previousConsensusColor: Color = Color(0xFF9CA3AF),
     val previousNarrative: String? = null,
