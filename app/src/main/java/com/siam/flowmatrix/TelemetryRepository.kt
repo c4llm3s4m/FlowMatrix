@@ -299,6 +299,30 @@ object TelemetryRepository {
         prefsManager?.saveHiddenCards(emptySet())
     }
 
+    // --- TELEMETRY EXPORT HELPERS ---
+    fun buildActiveSymbolExport(format: ExportFormat): Pair<String, String> {
+        val currSymbol = _activeSymbol.value
+        val currInterval = _activeTimeframe.value
+        val session = activeSessions[currSymbol] ?: SymbolSession(currSymbol)
+        val watchItem = activeWatchlist.firstOrNull { it.symbol == currSymbol }
+        val ttl = watchItem?.formattedTtl ?: "24h 00m"
+
+        val fileName = TelemetryExporter.generateFileName(currSymbol, currInterval, format)
+        val content = if (format == ExportFormat.TXT_REPORT) {
+            TelemetryExporter.generateSingleSymbolReport(session, _uiState.value, currInterval, ttl)
+        } else {
+            TelemetryExporter.generateTabularCsvExport(session, _uiState.value, currInterval)
+        }
+        return fileName to content
+    }
+
+    fun buildFullWatchlistExport(): Pair<String, String> {
+        val currInterval = _activeTimeframe.value
+        val fileName = TelemetryExporter.generateFileName("ALL", currInterval, ExportFormat.TXT_REPORT, isFullWatchlist = true)
+        val content = TelemetryExporter.generateFullWatchlistReport(activeSessions, activeWatchlist, _uiState.value, currInterval)
+        return fileName to content
+    }
+
     // --- ZERO-RESET SYMBOL & TIMEFRAME SWITCHING ---
     fun setSymbol(newSymbol: String) {
         val cleanSymbol = newSymbol.trim().uppercase()
@@ -327,7 +351,6 @@ object TelemetryRepository {
         val effective = detectEffectiveMode(ctx, _uiState.value.connectionMode)
         wsManager.syncSubscribedSymbols(activeWatchlist.map { it.symbol }.toSet(), newInterval, effective)
 
-        // Fix 3: Trigger background REST fetch for active session's klines/macro series for the new interval without clearing buffers
         val currentSession = activeSessions[_activeSymbol.value]
         if (currentSession != null) {
             scope.launch {
@@ -478,7 +501,6 @@ object TelemetryRepository {
             }
         }
 
-        // Fix 1: Real-time Price Ticks directly from @trade stream
         scope.launch {
             wsManager.symbolTradeTicks.collect { tick ->
                 val session = activeSessions[tick.symbol] ?: return@collect
@@ -497,9 +519,7 @@ object TelemetryRepository {
                 processSessionLiveTradeSnapshot(session, tick.trade)
 
                 if (tick.symbol == _activeSymbol.value) {
-                    // Fast real-time header price emission
                     _uiState.update { it.copy(livePrice = tick.trade.price, liveCandle = session.liveCandle) }
-                    // Throttled full engine calculation
                     scheduleThrottledEmission()
                 }
             }
@@ -541,7 +561,6 @@ object TelemetryRepository {
         }
     }
 
-    // Fix 2: Single-pass engine calculation per emission
     private fun emitActiveState() {
         val currSymbol = _activeSymbol.value
         val currInterval = _activeTimeframe.value
@@ -1456,7 +1475,6 @@ object TelemetryRepository {
         )
     }
 
-    // Fix 3: Pure read/calculation SMPE function (without calling addLast on smartMoneySnapshotBuffer)
     private fun computeSmpeState(session: SymbolSession): SmpeUiState {
         val currentPrice = if (session.livePrice > 0.0) session.livePrice else session.liveCandle?.close ?: session.klines.lastOrNull()?.close ?: 0.0
         val oiValueStr = session.openInterest.lastOrNull()?.sumOpenInterestValue?.toDoubleOrNull()
@@ -1581,7 +1599,6 @@ object TelemetryRepository {
                 }
             }
 
-            // Fix 3: Add SMPE snapshot to session buffer on REST poll completion
             val oiValueStr = oi.lastOrNull()?.sumOpenInterestValue?.toDoubleOrNull()
             val oiContracts = oi.lastOrNull()?.sumOpenInterest?.toDoubleOrNull() ?: 0.0
             val totalNotionalOI = oiValueStr ?: (oiContracts * currentPrice)
@@ -1593,8 +1610,6 @@ object TelemetryRepository {
             val longCapital = totalNotionalOI * longAccount
             val shortCapital = totalNotionalOI * shortAccount
             val capitalRatio = if (shortCapital > 0.0) longCapital / shortCapital else 0.0
-            val longPositionPct = longAccount * 100.0
-            val shortPositionPct = shortAccount * 100.0
 
             if (totalNotionalOI > 0.0 && currentPrice > 0.0) {
                 session.smartMoneySnapshotBuffer.addLast(
@@ -1603,8 +1618,8 @@ object TelemetryRepository {
                         price = currentPrice,
                         longCapital = longCapital,
                         shortCapital = shortCapital,
-                        longPositionPct = longPositionPct,
-                        shortPositionPct = shortPositionPct,
+                        longPositionPct = longAccount * 100.0,
+                        shortPositionPct = shortAccount * 100.0,
                         capitalRatio = capitalRatio
                     )
                 )

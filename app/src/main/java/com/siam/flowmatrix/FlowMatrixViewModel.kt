@@ -117,4 +117,14 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     fun removeSymbolFromWatchlist(symbol: String) = TelemetryRepository.removeSymbolFromWatchlist(symbol)
     fun clearWatchlistError() = TelemetryRepository.clearWatchlistError()
     fun refresh() = TelemetryRepository.refresh()
+
+    fun exportActiveSymbol(context: Context, format: ExportFormat) {
+        val (fileName, content) = TelemetryRepository.buildActiveSymbolExport(format)
+        TelemetryExporter.exportAndShareFile(context, fileName, content, format)
+    }
+
+    fun exportFullWatchlist(context: Context) {
+        val (fileName, content) = TelemetryRepository.buildFullWatchlistExport()
+        TelemetryExporter.exportAndShareFile(context, fileName, content, ExportFormat.TXT_REPORT)
+    }
 }

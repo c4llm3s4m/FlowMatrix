@@ -106,13 +106,15 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun DashboardScreen(viewModel: FlowMatrixViewModel) {
     val state by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
     var showCardVisibilityDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showAddSymbolDialog by remember { mutableStateOf(false) }
+    var showExportDialog by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        // --- TOP BAR: TITLE, LIVE STATUS, CARDS & GEAR SETTINGS ---
+        // --- TOP BAR: TITLE, LIVE STATUS, EXPORT, CARDS & GEAR SETTINGS ---
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -129,6 +131,9 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { showExportDialog = true }) {
+                    Text("📤 EXPORT", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                }
                 TextButton(onClick = { showCardVisibilityDialog = true }) {
                     Text("👁 CARDS", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
                 }
@@ -370,6 +375,16 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
         }
     }
 
+    // --- EXPORT TELEMETRY DIALOG ---
+    if (showExportDialog) {
+        ExportDialog(
+            onExportActiveTxt = { viewModel.exportActiveSymbol(context, ExportFormat.TXT_REPORT) },
+            onExportWatchlistTxt = { viewModel.exportFullWatchlist(context) },
+            onExportActiveCsv = { viewModel.exportActiveSymbol(context, ExportFormat.CSV_TIME_SERIES) },
+            onDismiss = { showExportDialog = false }
+        )
+    }
+
     // --- QUICK ADD SYMBOL DIALOG ---
     if (showAddSymbolDialog) {
         var addQuery by remember { mutableStateOf("") }
@@ -464,6 +479,90 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
             }
         )
     }
+}
+
+// Telemetry Export Selection Dialog
+@Composable
+fun ExportDialog(
+    onExportActiveTxt: () -> Unit,
+    onExportWatchlistTxt: () -> Unit,
+    onExportActiveCsv: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "📤 EXPORT TELEMETRY FOR AI ANALYSIS",
+                fontWeight = FontWeight.Black,
+                fontSize = 15.sp,
+                color = MaterialTheme.colorScheme.primary
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Export token-efficient multi-engine telemetry reports for external AI synthesis or tabular time-series analysis.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Surface(
+                    onClick = {
+                        onExportActiveTxt()
+                        onDismiss()
+                    },
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text("📄 ACTIVE CONTRACT AI REPORT (.TXT)", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Text("Full multi-engine report + embedded CSV appendix for active symbol.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f))
+                    }
+                }
+
+                Surface(
+                    onClick = {
+                        onExportWatchlistTxt()
+                        onDismiss()
+                    },
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text("📑 ALL WATCHLIST CONTRACTS (.TXT)", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Combined multi-engine AI reports for all watchlisted symbols.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f))
+                    }
+                }
+
+                Surface(
+                    onClick = {
+                        onExportActiveCsv()
+                        onDismiss()
+                    },
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text("📊 TIME-SERIES TABULAR DATA (.CSV)", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Flat CSV candles + OI + L/S + Consensus & OrderFlow columns.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f))
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("CLOSE", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
+            }
+        }
+    )
 }
 
 // 5-Symbol 24-Hour Watchlist Bar
