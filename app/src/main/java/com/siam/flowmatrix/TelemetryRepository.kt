@@ -132,7 +132,6 @@ object TelemetryRepository {
         prefsManager = prefs
 
         val savedMode = prefs.getConnectionMode()
-        val savedAppMode = prefs.getAppMode()
         val effective = detectEffectiveMode(applicationContext, savedMode)
 
         // Load Watchlist from Local Preferences or Initialize Default BTCUSDT (24h TTL)
@@ -165,7 +164,6 @@ object TelemetryRepository {
                 hiddenCards = prefs.getHiddenCards(),
                 connectionMode = savedMode,
                 activeMode = effective,
-                appMode = savedAppMode,
                 watchlist = activeWatchlist.toList()
             )
         }
@@ -208,11 +206,6 @@ object TelemetryRepository {
             sec < 3600 -> "${sec / 60} min ago"
             else -> "${sec / 3600} hr ago"
         }
-    }
-
-    fun setAppMode(mode: AppMode) {
-        prefsManager?.saveAppMode(mode)
-        _uiState.update { it.copy(appMode = mode) }
     }
 
     fun setConnectionMode(mode: ConnectionMode) {
@@ -312,7 +305,6 @@ object TelemetryRepository {
 
         if (formattedSymbol == _activeSymbol.value) return
 
-        // Auto-add to watchlist if not present and capacity allows
         if (activeWatchlist.none { it.symbol == formattedSymbol }) {
             addSymbolToWatchlist(formattedSymbol)
         } else {
@@ -326,12 +318,10 @@ object TelemetryRepository {
         if (newInterval == _activeTimeframe.value) return
         _activeTimeframe.value = newInterval
 
-        // Re-aggregate and sync WebSocket interval without clearing buffers
         val ctx = appContext ?: return
         val effective = detectEffectiveMode(ctx, _uiState.value.connectionMode)
         wsManager.syncSubscribedSymbols(activeWatchlist.map { it.symbol }.toSet(), newInterval, effective)
 
-        // Fix 3: Trigger background REST fetch for active session's klines/macro series for the new interval without clearing buffers
         val currentSession = activeSessions[_activeSymbol.value]
         if (currentSession != null) {
             scope.launch {
@@ -384,7 +374,6 @@ object TelemetryRepository {
         val effective = detectEffectiveMode(ctx, _uiState.value.connectionMode)
         wsManager.syncSubscribedSymbols(activeWatchlist.map { it.symbol }.toSet(), _activeTimeframe.value, effective)
 
-        // Launch staggered REST polling for new symbol
         val index = activeWatchlist.indexOf(item)
         startSymbolRestPolling(session, index * 800L)
 
@@ -404,7 +393,6 @@ object TelemetryRepository {
         val session = activeSessions.remove(formattedSymbol)
         session?.restPollingJob?.cancel()
 
-        // GRACEFUL EMPTY STATE HANDLING (Prevent crash on empty list)
         if (activeWatchlist.isEmpty()) {
             val now = System.currentTimeMillis()
             val defaultItem = WatchlistItem("BTCUSDT", createdAtMs = now, expiresAtMs = now + 24 * 3600 * 1000L)
@@ -431,14 +419,13 @@ object TelemetryRepository {
         reaperJob?.cancel()
         reaperJob = scope.launch {
             while (isActive) {
-                delay(60_000L) // Check expirations every 1 minute
+                delay(60_000L)
                 val expiredSymbols = activeWatchlist.filter { it.isExpired }.map { it.symbol }
                 if (expiredSymbols.isNotEmpty()) {
                     expiredSymbols.forEach { sym ->
                         removeSymbolFromWatchlist(sym)
                     }
                 } else {
-                    // Update TTL strings in UI state
                     _uiState.update { it.copy(watchlist = activeWatchlist.toList()) }
                 }
             }
@@ -497,7 +484,7 @@ object TelemetryRepository {
     private fun startSymbolRestPolling(session: SymbolSession, offsetMs: Long) {
         session.restPollingJob?.cancel()
         session.restPollingJob = scope.launch {
-            delay(offsetMs) // Stagger request bursts across active symbols
+            delay(offsetMs)
             while (isActive) {
                 fetchSymbolDashboardData(session)
                 delay(30_000L)
@@ -516,7 +503,6 @@ object TelemetryRepository {
         }
     }
 
-    // Emit aggregated UI State for the currently viewed symbol and timeframe from in-memory session data
     private fun emitActiveState() {
         val currSymbol = _activeSymbol.value
         val currInterval = _activeTimeframe.value
@@ -934,6 +920,7 @@ object TelemetryRepository {
             return OrderFlowRegimeState(
                 buildingWindow = true,
                 debugState = OrderFlowRegimeDebugState(
+                    isDebugEnabled = _uiState.value.orderFlowRegime.debugState.isDebugEnabled,
                     connectionStage = wsManager.tradeStreamStage.value,
                     socketUrl = wsManager.tradeSocketUrl.value,
                     currentStream = wsManager.tradeStreamName.value,
@@ -1186,12 +1173,30 @@ object TelemetryRepository {
         val currentTransText = session.transitionTextMap[activeTf] ?: "NONE"
         val currentLastNonBal = session.lastNonBalancedRegimes[activeTf]
 
+        val warnings = mutableListOf<String>()
+        if (wsManager.tradeMsgCount == 0L) warnings.add("WARNING: No WS Messages")
+        if (session.tradeSnapshotBuffer.isEmpty()) warnings.add("WARNING: No Buffered Trades")
+        if (session.lastTradeTimeMs > 0 && (now - session.lastTradeTimeMs > 10_000L)) warnings.add("WARNING: Trade Stream Stalled")
+
+        // Cleanup #2: Restore full OrderFlowRegimeDebugState fields
         val debugState = OrderFlowRegimeDebugState(
             isDebugEnabled = _uiState.value.orderFlowRegime.debugState.isDebugEnabled,
             connectionStage = wsManager.tradeStreamStage.value,
             socketUrl = wsManager.tradeSocketUrl.value,
             currentStream = wsManager.tradeStreamName.value,
             currentSymbol = session.symbol,
+            previousSymbol = wsManager.prevSymbol,
+            lastSubscriptionTimeFormatted = if (wsManager.lastSubTimeMs > 0) timeFormatter.format(Date(wsManager.lastSubTimeMs)) else "--:--:--",
+            lastError = wsManager.tradeLastError.value,
+            messagesReceived = wsManager.tradeMsgCount,
+            messagesPerSecond = session.tradeRateWindow.size.toDouble(),
+            lastMessageTimestampFormatted = if (session.lastTradeTimeMs > 0L) millisFormatter.format(Date(session.lastTradeTimeMs)) else "--:--:--.---",
+            msSinceLastMessage = if (session.lastTradeTimeMs > 0L) now - session.lastTradeTimeMs else 0L,
+            rawMessagePreview = wsManager.rawLastMessage.value,
+            reconnectCount = wsManager.reconnectCount,
+            bufferedTradesCount = trades.size,
+            latestSnapshotTimestampFormatted = if (trades.isNotEmpty()) millisFormatter.format(Date(trades.last().timestampMs)) else "--:--:--.---",
+            latestSnapshotPrice = trades.lastOrNull()?.price ?: 0.0,
             currentTimeframe = activeTf,
             windowStatus = if (isBuilding) "BUILDING" else "READY",
             lastPrice = lastPrice,
@@ -1223,7 +1228,9 @@ object TelemetryRepository {
             vacuumStreak = vacStreak,
             defenseState = defenseStateStr,
             bullishRegimeScore = bullScore,
-            bearishRegimeScore = bearScore
+            bearishRegimeScore = bearScore,
+            parseFailuresCount = wsManager.parseFailuresCount,
+            warnings = warnings
         )
 
         return OrderFlowRegimeState(
@@ -1260,19 +1267,61 @@ object TelemetryRepository {
         val now = System.currentTimeMillis()
         val targetDurationMs = getTimeframeDurationMs(activeTf)
 
+        val snapshotCount = session.snapshotBuffer.size
+        val oldestAgeSec = if (session.snapshotBuffer.isNotEmpty()) (now - session.snapshotBuffer.first().timestampMs) / 1000L else 0L
+
         val anchorSnapshot = session.snapshotBuffer.lastOrNull { snapshot ->
             (now - snapshot.timestampMs) >= targetDurationMs
         }
+        val anchorAgeSec = if (anchorSnapshot != null) (now - anchorSnapshot.timestampMs) / 1000L else 0L
+        val latestAgeSec = if (session.snapshotBuffer.isNotEmpty()) (now - session.snapshotBuffer.last().timestampMs) / 1000L else 0L
 
         val currentPrice = session.liveCandle?.close ?: session.klines.lastOrNull()?.close ?: 0.0
         val currentOi = session.openInterest.lastOrNull()?.sumOpenInterest?.toDoubleOrNull() ?: 0.0
 
+        val warnings = mutableListOf<String>()
+        if (session.snapshotBuffer.isEmpty()) warnings.add("WARNING: Snapshot Buffer Empty")
+        if (anchorSnapshot == null) warnings.add("WARNING: Anchor Snapshot Missing / Window Building")
+
         if (anchorSnapshot == null || currentOi <= 0.0 || currentPrice <= 0.0) {
+            val debugState = OiFlowRegimeDebugState(
+                isDebugEnabled = _uiState.value.oiFlowRegime.debugState.isDebugEnabled,
+                snapshotCount = snapshotCount,
+                requiredWindowSec = targetDurationMs / 1000L,
+                oldestSnapshotAgeSec = oldestAgeSec,
+                anchorSnapshotAgeSec = 0L,
+                latestSnapshotAgeSec = latestAgeSec,
+                bufferStatus = "BUILDING",
+                currentPrice = currentPrice,
+                anchorPrice = 0.0,
+                currentOi = currentOi,
+                anchorOi = 0.0,
+                priceDelta = 0.0,
+                priceDeltaPercent = 0.0,
+                oiDelta = 0.0,
+                oiDeltaPercent = 0.0,
+                priceThresholdPass = false,
+                oiThresholdPass = false,
+                overallThresholdPass = false,
+                regimeLogicCondition = "BUILDING",
+                oiScore = 0,
+                priceScore = 0,
+                totalScore = 0,
+                currentCvd = session.klines.sumOf { it.volumeDelta },
+                cvdDirection = "NONE",
+                transitionTimeSecAgo = null,
+                lastOiPollTimeFormatted = if (session.lastOiPollTimeMs > 0) timeFormatter.format(Date(session.lastOiPollTimeMs)) else "--:--:--",
+                msSinceOiPoll = if (session.lastOiPollTimeMs > 0) now - session.lastOiPollTimeMs else 0L,
+                lastPriceTickTimeFormatted = if (session.lastPriceTickTimeMs > 0) millisFormatter.format(Date(session.lastPriceTickTimeMs)) else "--:--:--.---",
+                msSincePriceTick = if (session.lastPriceTickTimeMs > 0) now - session.lastPriceTickTimeMs else 0L,
+                warnings = warnings
+            )
             return OIFlowRegimeState(
                 regime = "BUILDING WINDOW",
                 mechanics = "Waiting for sufficient historical data",
                 badgeColor = Color(0xFF9CA3AF),
-                buildingWindow = true
+                buildingWindow = true,
+                debugState = debugState
             )
         }
 
@@ -1281,23 +1330,29 @@ object TelemetryRepository {
         val deltaOI = currentOi - anchorSnapshot.openInterest
         val deltaOIPct = if (anchorSnapshot.openInterest > 0.0) ((currentOi - anchorSnapshot.openInterest) / anchorSnapshot.openInterest) * 100.0 else 0.0
 
-        val passesSignificanceFilter = abs(deltaPricePct) >= 0.15 && abs(deltaOIPct) >= 0.25
+        val pricePass = abs(deltaPricePct) >= 0.15
+        val oiPass = abs(deltaOIPct) >= 0.25
+        val passesSignificanceFilter = pricePass && oiPass
 
-        if (!passesSignificanceFilter) {
-            return OIFlowRegimeState(
-                regime = "NEUTRAL",
-                mechanics = "Flow expansion below threshold",
-                badgeColor = Color(0xFF9CA3AF),
-                strength = "LOW",
-                strengthColor = Color(0xFF9CA3AF),
-                priceDeltaPercent = deltaPricePct,
-                oiDeltaContracts = deltaOI,
-                oiDeltaPercent = deltaOIPct,
-                buildingWindow = false
-            )
+        val currentCvd = session.klines.sumOf { it.volumeDelta }
+        val cvdDir = if (currentCvd > 0.0) "POSITIVE" else if (currentCvd < 0.0) "NEGATIVE" else "ZERO"
+
+        val absOI = abs(deltaOIPct)
+        val oiScoreVal = when {
+            absOI >= 3.0 -> 3
+            absOI >= 1.0 -> 2
+            else -> 1
         }
+        val absPrice = abs(deltaPricePct)
+        val priceScoreVal = when {
+            absPrice >= 3.0 -> 3
+            absPrice >= 1.0 -> 2
+            else -> 1
+        }
+        val totalStrengthScore = oiScoreVal + priceScoreVal
 
         val (regimeStr, mechanicsStr, colorVal) = when {
+            !passesSignificanceFilter -> Triple("NEUTRAL", "Flow expansion below threshold", Color(0xFF9CA3AF))
             deltaOI > 0.0 && deltaPrice > 0.0 -> Triple("NEW LONGS", "Fresh capital entering Longs (Buy-to-Open)", Color(0xFF10B981))
             deltaOI > 0.0 && deltaPrice < 0.0 -> Triple("NEW SHORTS", "Fresh capital entering Shorts (Sell-to-Open)", Color(0xFFEF4444))
             deltaOI < 0.0 && deltaPrice > 0.0 -> Triple("SHORT COVERING", "Shorts buying back positions (Buy-to-Close)", Color(0xFFEAB308))
@@ -1305,7 +1360,6 @@ object TelemetryRepository {
             else -> Triple("NEUTRAL", "Waiting for next OI delta", Color(0xFF9CA3AF))
         }
 
-        val currentCvd = session.klines.sumOf { it.volumeDelta }
         val cvdConfirm = when {
             regimeStr == "NEW LONGS" && currentCvd > 0.0 -> "CVD CONFIRMED"
             regimeStr == "NEW SHORTS" && currentCvd < 0.0 -> "CVD CONFIRMED"
@@ -1313,17 +1367,52 @@ object TelemetryRepository {
             else -> null
         }
 
+        // Cleanup #2: Restore full OiFlowRegimeDebugState fields
+        val debugState = OiFlowRegimeDebugState(
+            isDebugEnabled = _uiState.value.oiFlowRegime.debugState.isDebugEnabled,
+            snapshotCount = snapshotCount,
+            requiredWindowSec = targetDurationMs / 1000L,
+            oldestSnapshotAgeSec = oldestAgeSec,
+            anchorSnapshotAgeSec = anchorAgeSec,
+            latestSnapshotAgeSec = latestAgeSec,
+            bufferStatus = "READY",
+            currentPrice = currentPrice,
+            anchorPrice = anchorSnapshot.price,
+            currentOi = currentOi,
+            anchorOi = anchorSnapshot.openInterest,
+            priceDelta = deltaPrice,
+            priceDeltaPercent = deltaPricePct,
+            oiDelta = deltaOI,
+            oiDeltaPercent = deltaOIPct,
+            priceThresholdPass = pricePass,
+            oiThresholdPass = oiPass,
+            overallThresholdPass = passesSignificanceFilter,
+            regimeLogicCondition = if (passesSignificanceFilter) "abs(deltaPricePct) >= 0.15 && abs(deltaOIPct) >= 0.25" else "EXPANSION_BELOW_THRESHOLD",
+            oiScore = oiScoreVal,
+            priceScore = priceScoreVal,
+            totalScore = totalStrengthScore,
+            currentCvd = currentCvd,
+            cvdDirection = cvdDir,
+            transitionTimeSecAgo = if (session.lastRegimeTransitionTimeMs > 0) (now - session.lastRegimeTransitionTimeMs) / 1000L else null,
+            lastOiPollTimeFormatted = if (session.lastOiPollTimeMs > 0) timeFormatter.format(Date(session.lastOiPollTimeMs)) else "--:--:--",
+            msSinceOiPoll = if (session.lastOiPollTimeMs > 0) now - session.lastOiPollTimeMs else 0L,
+            lastPriceTickTimeFormatted = if (session.lastPriceTickTimeMs > 0) millisFormatter.format(Date(session.lastPriceTickTimeMs)) else "--:--:--.---",
+            msSincePriceTick = if (session.lastPriceTickTimeMs > 0) now - session.lastPriceTickTimeMs else 0L,
+            warnings = warnings
+        )
+
         return OIFlowRegimeState(
             regime = regimeStr,
             mechanics = mechanicsStr,
             badgeColor = colorVal,
-            strength = if (abs(deltaOIPct) >= 1.0) "HIGH" else "MEDIUM",
-            strengthColor = if (abs(deltaOIPct) >= 1.0) Color(0xFF10B981) else Color(0xFFEAB308),
+            strength = if (!passesSignificanceFilter) "LOW" else if (abs(deltaOIPct) >= 1.0) "HIGH" else "MEDIUM",
+            strengthColor = if (!passesSignificanceFilter) Color(0xFF9CA3AF) else if (abs(deltaOIPct) >= 1.0) Color(0xFF10B981) else Color(0xFFEAB308),
             confirmation = cvdConfirm,
             priceDeltaPercent = deltaPricePct,
             oiDeltaContracts = deltaOI,
             oiDeltaPercent = deltaOIPct,
-            buildingWindow = false
+            buildingWindow = false,
+            debugState = debugState
         )
     }
 

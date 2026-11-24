@@ -3,11 +3,7 @@ package com.siam.flowmatrix
 import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
 
 class CardOrderPreferences(context: Context) {
     private val prefs = context.getSharedPreferences("flow_matrix_card_prefs", Context.MODE_PRIVATE)
@@ -45,15 +41,6 @@ class CardOrderPreferences(context: Context) {
 
     fun saveConnectionMode(mode: ConnectionMode) {
         prefs.edit().putString("connection_mode_v1", mode.id).apply()
-    }
-
-    fun getAppMode(): AppMode {
-        val savedId = prefs.getString("app_mode_v1", AppMode.GEMINI.id) ?: AppMode.GEMINI.id
-        return AppMode.fromId(savedId)
-    }
-
-    fun saveAppMode(mode: AppMode) {
-        prefs.edit().putString("app_mode_v1", mode.id).apply()
     }
 
     fun getWatchlist(): List<WatchlistItem> {
@@ -99,7 +86,6 @@ data class DashboardState(
     val hiddenCards: Set<TelemetryCardType> = emptySet(),
     val connectionMode: ConnectionMode = ConnectionMode.AUTO,
     val activeMode: ConnectionMode = ConnectionMode.BROADBAND,
-    val appMode: AppMode = AppMode.GEMINI,
     val watchlist: List<WatchlistItem> = emptyList(),
     val watchlistError: String? = null,
     val error: String? = null
@@ -114,15 +100,6 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
 
     val uiState: StateFlow<DashboardState> = TelemetryRepository.uiState
 
-    val appModeState: StateFlow<AppMode> = TelemetryRepository.uiState
-        .map { it.appMode }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, TelemetryRepository.uiState.value.appMode)
-
-    val smpeState: StateFlow<SmpeUiState> = TelemetryRepository.uiState
-        .map { it.smpeUiState }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, TelemetryRepository.uiState.value.smpeUiState)
-
-    fun setAppMode(mode: AppMode) = TelemetryRepository.setAppMode(mode)
     fun setConnectionMode(mode: ConnectionMode) = TelemetryRepository.setConnectionMode(mode)
     fun toggleOiDebugMode() = TelemetryRepository.toggleOiDebugMode()
     fun toggleOrderFlowDebugMode() = TelemetryRepository.toggleOrderFlowDebugMode()

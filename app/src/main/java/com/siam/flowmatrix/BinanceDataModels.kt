@@ -257,17 +257,7 @@ data class OIFlowRegimeState(
     val debugState: OiFlowRegimeDebugState = OiFlowRegimeDebugState()
 )
 
-// 11. Application Mode System (Phase 5: GEMINI vs COPILOT)
-enum class AppMode(val id: String, val label: String) {
-    GEMINI("GEMINI", "GEMINI MODE"),
-    COPILOT("COPILOT", "COPILOT MODE");
-
-    companion object {
-        fun fromId(id: String): AppMode = entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: GEMINI
-    }
-}
-
-// 12. Trade Snapshot Data Model (Phase 4: Order Flow Engine)
+// 11. Trade Snapshot Data Model (Phase 4: Order Flow Engine)
 data class TradeSnapshot(
     val timestampMs: Long,
     val price: Double,
@@ -286,7 +276,7 @@ enum class WsConnectionStage {
     DISCONNECTED
 }
 
-// 13. Order Flow Regime Diagnostics / Debug State Model (Full Diagnostics Pipeline with Wyckoff V3.5 Metrics)
+// 12. Order Flow Regime Diagnostics / Debug State Model (Full Diagnostics Pipeline with Wyckoff V3.5 Metrics)
 data class OrderFlowRegimeDebugState(
     val isDebugEnabled: Boolean = false,
     val connectionStage: WsConnectionStage = WsConnectionStage.DISCONNECTED,
@@ -341,7 +331,7 @@ data class OrderFlowRegimeDebugState(
     val warnings: List<String> = emptyList()
 )
 
-// 14. Order Flow Regime State Model (Live WS Stream Engine V3.5)
+// 13. Order Flow Regime State Model (Live WS Stream Engine V3.5)
 data class OrderFlowRegimeState(
     val regime: String = "BALANCED FLOW",
     val badgeColor: Color = Color(0xFF9CA3AF),
@@ -371,14 +361,14 @@ data class OrderFlowRegimeState(
     val debugState: OrderFlowRegimeDebugState = OrderFlowRegimeDebugState()
 )
 
-// 15. Flow Consensus History Event Model (Consensus Memory Engine)
+// 14. Flow Consensus History Event Model (Consensus Memory Engine)
 data class ConsensusHistoryEvent(
     val timestampFormatted: String,
     val consensus: String,
     val badgeColor: Color
 )
 
-// 16. Flow Consensus Diagnostics / Debug State Model (V3.5 Engine)
+// 15. Flow Consensus Diagnostics / Debug State Model (V3.5 Engine)
 data class FlowConsensusDebugState(
     val isDebugEnabled: Boolean = false,
     val inputOiRegime: String = "NEUTRAL",
@@ -402,7 +392,7 @@ data class FlowConsensusDebugState(
     val ruleFired: String = "No rule fired (NEUTRAL)"
 )
 
-// 17. Flow Consensus State Model (Dual Engine Consensus, Intent, Mechanics/Trade Bias & Unified 0-100% Confidence)
+// 16. Flow Consensus State Model (Dual Engine Consensus, Intent, Mechanics/Trade Bias & Unified 0-100% Confidence)
 data class FlowConsensusState(
     val consensus: String = "NEUTRAL",
     val badgeColor: Color = Color(0xFF9CA3AF),
@@ -429,7 +419,7 @@ data class FlowConsensusState(
     val debugState: FlowConsensusDebugState = FlowConsensusDebugState()
 )
 
-// 18. Smart Money Position Snapshot (Phase 6: SMPE Engine)
+// 17. Smart Money Position Snapshot (Phase 6: SMPE Engine)
 data class SmartMoneySnapshot(
     val timestampMs: Long,
     val price: Double,
@@ -440,7 +430,7 @@ data class SmartMoneySnapshot(
     val capitalRatio: Double
 )
 
-// 19. Smart Money Position Engine (SMPE) State Model (Phase 6)
+// 18. Smart Money Position Engine (SMPE) State Model (Phase 6)
 data class SmpeUiState(
     val isDebugEnabled: Boolean = false,
     val currentPrice: Double = 0.0,

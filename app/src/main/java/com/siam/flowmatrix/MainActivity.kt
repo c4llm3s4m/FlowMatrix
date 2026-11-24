@@ -151,26 +151,6 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        // --- APP MODE SYSTEM SELECTOR (GEMINI MODE vs COPILOT MODE) ---
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            AppMode.entries.forEach { mode ->
-                FilterChip(
-                    selected = state.appMode == mode,
-                    onClick = { viewModel.setAppMode(mode) },
-                    label = {
-                        val labelText = if (mode == AppMode.GEMINI) "[ GEMINI MODE ]" else "[ COPILOT MODE ]"
-                        Text(labelText, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
-                    }
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(4.dp))
-
         // --- SEARCH INPUT & GO BUTTON ---
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -247,19 +227,10 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
 
         val activeCandle = state.liveCandle ?: state.candles.lastOrNull()
 
-        // Filter cards based on AppMode and User Hidden Cards Selection
-        val visibleCards = remember(state.cardOrder, state.appMode, state.hiddenCards) {
+        // Filter cards based on User Hidden Cards Selection (All 11 cards render by default)
+        val visibleCards = remember(state.cardOrder, state.hiddenCards) {
             state.cardOrder.filter { cardType ->
-                val isAppModeAllowed = if (state.appMode == AppMode.GEMINI) {
-                    cardType != TelemetryCardType.OI_FLOW_REGIME &&
-                    cardType != TelemetryCardType.ORDER_FLOW_REGIME &&
-                    cardType != TelemetryCardType.FLOW_CONSENSUS &&
-                    cardType != TelemetryCardType.SMART_MONEY_POSITION
-                } else {
-                    true
-                }
-                val isUserVisible = cardType !in state.hiddenCards
-                isAppModeAllowed && isUserVisible
+                cardType !in state.hiddenCards
             }
         }
 
@@ -1000,7 +971,7 @@ fun SmartMoneyPositionCard(
             )
         }
 
-        // --- COLLAPSIBLE DIAGNOSTICS / DEBUG DRAWER ---
+        // --- COLLAPSIBLE DIAGNOSTICS / DEBUG SECTION ---
         if (smpeState.isDebugEnabled) {
             Spacer(modifier = Modifier.height(8.dp))
             HorizontalDivider(color = GoldNeutral.copy(alpha = 0.4f))
@@ -1591,7 +1562,7 @@ fun OrderFlowRegimeCard(
     }
 }
 
-// ENHANCED: Core 4-Quadrant OI Flow Regime Card (Copilot Mode Feature)
+// ENHANCED: Core 4-Quadrant OI Flow Regime Card
 @Composable
 fun OiFlowRegimeCard(
     regimeState: OIFlowRegimeState,
