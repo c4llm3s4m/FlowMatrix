@@ -6,6 +6,23 @@ import java.util.Locale
 import kotlin.math.abs
 
 @Serializable
+data class WatchlistItem(
+    val symbol: String,
+    val createdAtMs: Long,
+    val expiresAtMs: Long // createdAtMs + 24 * 3600 * 1000L
+) {
+    val remainingMs: Long get() = (expiresAtMs - System.currentTimeMillis()).coerceAtLeast(0L)
+    val formattedTtl: String
+        get() {
+            val remSec = remainingMs / 1000L
+            val hrs = remSec / 3600L
+            val mins = (remSec % 3600L) / 60L
+            return "${hrs}h ${mins}m"
+        }
+    val isExpired: Boolean get() = remainingMs <= 0L
+}
+
+@Serializable
 data class OpenInterestHistResponse(
     val symbol: String,
     val sumOpenInterest: String,
@@ -402,6 +419,8 @@ data class FlowConsensusState(
     val intentState: String = "NEUTRAL AUCTION",
     val intentColor: Color = Color(0xFF9CA3AF),
     val intentDescription: String = "No dominant directional intent detected.",
+    val transitionSignal: String = "NONE",
+    val transitionText: String = "NONE",
     val previousConsensus: String? = null,
     val previousConsensusColor: Color = Color(0xFF9CA3AF),
     val previousNarrative: String? = null,

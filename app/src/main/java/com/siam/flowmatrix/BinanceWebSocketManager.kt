@@ -7,8 +7,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -17,7 +20,9 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
+import java.util.Collections
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -47,6 +52,11 @@ sealed interface WebSocketState {
     }
 }
 
+// Data events routed per symbol from multi-stream Combined WebSocket
+data class SymbolKlineTick(val symbol: String, val candle: CandleOrderFlow, val initialDelta: InitialDeltaSign)
+data class SymbolDepthTick(val symbol: String, val imbalance: OrderBookImbalance)
+data class SymbolTradeTick(val symbol: String, val trade: TradeSnapshot)
+
 class BinanceWebSocketManager(
     private val client: OkHttpClient = defaultClient,
     dispatcher: CoroutineDispatcher = Dispatchers.IO
@@ -57,15 +67,13 @@ class BinanceWebSocketManager(
     @Volatile
     private var webSocket: WebSocket? = null
 
+    private val subscribedSymbols = Collections.synchronizedSet(LinkedHashSet<String>())
     @Volatile
-    private var depthWebSocket: WebSocket? = null
-
-    @Volatile
-    private var tradeWebSocket: WebSocket? = null
-
-    private var activeSymbol: String = "BTCUSDT"
     private var activeInterval: String = "5m"
+    @Volatile
     private var activeConnectionMode: ConnectionMode = ConnectionMode.AUTO
+    @Volatile
+    private var viewSymbol: String = "BTCUSDT"
 
     private var previousSymbolName: String? = null
     private var lastSubscriptionTimeMsVal: Long = 0L
@@ -74,6 +82,17 @@ class BinanceWebSocketManager(
     private var reconnectAttempt = 0
     private val isManuallyDisconnected = AtomicBoolean(false)
 
+    // Shared Flow Ticks for Multi-Symbol Session Dispatching
+    private val _symbolKlineTicks = MutableSharedFlow<SymbolKlineTick>(extraBufferCapacity = 64)
+    val symbolKlineTicks: SharedFlow<SymbolKlineTick> = _symbolKlineTicks.asSharedFlow()
+
+    private val _symbolDepthTicks = MutableSharedFlow<SymbolDepthTick>(extraBufferCapacity = 64)
+    val symbolDepthTicks: SharedFlow<SymbolDepthTick> = _symbolDepthTicks.asSharedFlow()
+
+    private val _symbolTradeTicks = MutableSharedFlow<SymbolTradeTick>(extraBufferCapacity = 64)
+    val symbolTradeTicks: SharedFlow<SymbolTradeTick> = _symbolTradeTicks.asSharedFlow()
+
+    // View-specific backward-compatible flows for current active view symbol
     private val _liveCandle = MutableStateFlow<CandleOrderFlow?>(null)
     val liveCandle: StateFlow<CandleOrderFlow?> = _liveCandle.asStateFlow()
 
@@ -101,6 +120,9 @@ class BinanceWebSocketManager(
     private val _rawLastMessage = MutableStateFlow<String>("No messages received")
     val rawLastMessage: StateFlow<String> = _rawLastMessage.asStateFlow()
 
+    private val _connectionState = MutableStateFlow<WebSocketState>(WebSocketState.Initializing)
+    val connectionState: StateFlow<WebSocketState> = _connectionState.asStateFlow()
+
     private val aggTradeMsgCount = AtomicLong(0L)
     val tradeMsgCount: Long get() = aggTradeMsgCount.get()
 
@@ -109,76 +131,105 @@ class BinanceWebSocketManager(
 
     val reconnectCount: Int get() = reconnectAttempt
     val prevSymbol: String? get() = previousSymbolName
-    val currSymbol: String get() = activeSymbol
+    val currSymbol: String get() = viewSymbol
     val lastSubTimeMs: Long get() = lastSubscriptionTimeMsVal
 
-    @Volatile
-    private var trackedCandleOpenTime = 0L
+    private val trackedCandleOpenTimes = ConcurrentHashMap<String, Long>()
+    private val lastDepthFrameTimesMs = ConcurrentHashMap<String, Long>()
 
-    @Volatile
-    private var lastDepthFrameTimeMs = 0L
-
-    private val _connectionState = MutableStateFlow<WebSocketState>(WebSocketState.Initializing)
-    val connectionState: StateFlow<WebSocketState> = _connectionState.asStateFlow()
-
-    fun connect(symbol: String, interval: String = "5m", mode: ConnectionMode = ConnectionMode.AUTO) {
-        val trimmed = symbol.trim().uppercase()
-        if (trimmed.isBlank()) return
-
-        val formattedSymbol = if (!trimmed.endsWith("USDT") && !trimmed.endsWith("BUSD")) {
-            "${trimmed}USDT"
-        } else {
-            trimmed
+    fun setViewSymbol(symbol: String) {
+        val clean = symbol.trim().uppercase()
+        if (clean.isBlank()) return
+        if (viewSymbol != clean) {
+            previousSymbolName = viewSymbol
+            viewSymbol = clean
         }
+    }
 
-        if (activeSymbol != formattedSymbol && activeSymbol.isNotBlank()) {
-            previousSymbolName = activeSymbol
-        }
+    fun syncSubscribedSymbols(symbols: Set<String>, interval: String = "5m", mode: ConnectionMode = ConnectionMode.AUTO) {
+        val cleanSet = symbols.map { it.trim().uppercase() }.filter { it.isNotBlank() }.toSet()
+        if (cleanSet.isEmpty()) return
 
-        activeSymbol = formattedSymbol
         activeInterval = interval
         activeConnectionMode = mode
         lastSubscriptionTimeMsVal = System.currentTimeMillis()
         isManuallyDisconnected.set(false)
-        reconnectAttempt = 0
-        trackedCandleOpenTime = 0L
-        lastDepthFrameTimeMs = 0L
-        aggTradeMsgCount.set(0L)
-        tradeParseFailures.set(0L)
-        _tradeLastError.value = null
-        _rawLastMessage.value = "No messages received"
-        _initialDeltaSign.value = InitialDeltaSign.WAITING
-        _liveOrderBookImbalance.value = null
-        _liveTrade.value = null
 
-        connectInternal()
+        val toAdd = cleanSet - subscribedSymbols
+        val toRemove = subscribedSymbols - cleanSet
+
+        subscribedSymbols.clear()
+        subscribedSymbols.addAll(cleanSet)
+
+        val ws = webSocket
+        if (ws != null && _connectionState.value is WebSocketState.Connected) {
+            if (toRemove.isNotEmpty()) sendUnsubscribePayload(ws, toRemove)
+            if (toAdd.isNotEmpty()) sendSubscribePayload(ws, toAdd)
+        } else {
+            connectInternal()
+        }
+    }
+
+    fun connect(symbol: String, interval: String = "5m", mode: ConnectionMode = ConnectionMode.AUTO) {
+        setViewSymbol(symbol)
+        val currentSet = subscribedSymbols.toSet() + viewSymbol
+        syncSubscribedSymbols(currentSet, interval, mode)
+    }
+
+    private fun sendSubscribePayload(ws: WebSocket, symbols: Collection<String>) {
+        if (symbols.isEmpty()) return
+        val depthSuffix = if (activeConnectionMode == ConnectionMode.CELLULAR) "@depth20@1000ms" else "@depth20@100ms"
+        val params = mutableListOf<String>()
+        symbols.forEach { sym ->
+            val lower = sym.lowercase()
+            params.add("${lower}@kline_$activeInterval")
+            params.add("${lower}$depthSuffix")
+            params.add("${lower}@trade")
+        }
+        val json = JSONObject().apply {
+            put("method", "SUBSCRIBE")
+            put("params", params)
+            put("id", System.currentTimeMillis() % 100000)
+        }
+        ws.send(json.toString())
+    }
+
+    private fun sendUnsubscribePayload(ws: WebSocket, symbols: Collection<String>) {
+        if (symbols.isEmpty()) return
+        val params = mutableListOf<String>()
+        symbols.forEach { sym ->
+            val lower = sym.lowercase()
+            params.add("${lower}@kline_1m")
+            params.add("${lower}@kline_5m")
+            params.add("${lower}@kline_15m")
+            params.add("${lower}@kline_1h")
+            params.add("${lower}@depth20@100ms")
+            params.add("${lower}@depth20@1000ms")
+            params.add("${lower}@trade")
+        }
+        val json = JSONObject().apply {
+            put("method", "UNSUBSCRIBE")
+            put("params", params)
+            put("id", System.currentTimeMillis() % 100000)
+        }
+        ws.send(json.toString())
     }
 
     @Synchronized
     private fun connectInternal() {
         if (isManuallyDisconnected.get()) return
 
-        // Cancel pending reconnection timer
         reconnectJob?.cancel()
         reconnectJob = null
 
-        // Cancel existing WebSocket references safely
         val oldWs = webSocket
         webSocket = null
         oldWs?.cancel()
 
-        val oldDepthWs = depthWebSocket
-        depthWebSocket = null
-        oldDepthWs?.cancel()
-
-        val oldTradeWs = tradeWebSocket
-        tradeWebSocket = null
-        oldTradeWs?.cancel()
-
-        val lowerSymbol = activeSymbol.lowercase()
-
-        // 1. Primary Dedicated Kline WebSocket (@kline) - 100% Isolated for live price, aggression & initial pulse
-        val wsUrl = "wss://fstream.binance.com/market/ws/${lowerSymbol}@kline_$activeInterval"
+        val wsUrl = "wss://fstream.binance.com/stream"
+        _tradeSocketUrl.value = wsUrl
+        _tradeStreamName.value = "combined_stream"
+        _tradeStreamStage.value = WsConnectionStage.SOCKET_CREATING
         _connectionState.value = WebSocketState.Connecting(reconnectAttempt)
 
         val request = Request.Builder().url(wsUrl).build()
@@ -188,70 +239,164 @@ class BinanceWebSocketManager(
                 if (this@BinanceWebSocketManager.webSocket != webSocket) return
                 reconnectAttempt = 0
                 _connectionState.value = WebSocketState.Connected
+                _tradeStreamStage.value = WsConnectionStage.SOCKET_OPEN
+                _tradeStreamStage.value = WsConnectionStage.SUBSCRIBED
+
+                // AUTO-RESUBVERTISE ALL ACTIVE SYMBOLS ON WEBSOCKET OPEN / RECONNECT
+                val symbolsToSub = subscribedSymbols.toSet().ifEmpty { setOf(viewSymbol) }
+                sendSubscribePayload(webSocket, symbolsToSub)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (this@BinanceWebSocketManager.webSocket != webSocket) return
                 try {
+                    _tradeStreamStage.value = WsConnectionStage.RECEIVING_MESSAGES
+                    _rawLastMessage.value = if (text.length > 180) text.substring(0, 180) + "..." else text
+                    aggTradeMsgCount.incrementAndGet()
+
                     val json = JSONObject(text)
 
-                    // Respond to server text ping frame if present
                     if (json.has("ping")) {
                         val pingVal = json.get("ping")
                         webSocket.send("""{"pong":$pingVal}""")
                         return
                     }
 
-                    if (!json.has("k")) return
-                    val kline = json.getJSONObject("k")
+                    val streamName = json.optString("stream", "")
+                    val data = if (json.has("data")) json.getJSONObject("data") else json
 
-                    val totalVol = kline.optString("v", "0.0").toDoubleOrNull() ?: 0.0
-                    val takerBuyVol = kline.optString("V", "0.0").toDoubleOrNull() ?: (totalVol / 2.0)
-                    val openTime = kline.optLong("t", System.currentTimeMillis())
+                    val eventType = data.optString("e", "")
+                    val sym = data.optString("s", "").uppercase().ifBlank {
+                        if (streamName.contains("@")) streamName.split("@")[0].uppercase() else viewSymbol
+                    }
 
-                    val liveData = CandleOrderFlow(
-                        openTime = openTime,
-                        open = kline.optString("o", "0.0").toDoubleOrNull() ?: 0.0,
-                        high = kline.optString("h", "0.0").toDoubleOrNull() ?: 0.0,
-                        low = kline.optString("l", "0.0").toDoubleOrNull() ?: 0.0,
-                        close = kline.optString("c", "0.0").toDoubleOrNull() ?: 0.0,
-                        totalVolume = totalVol,
-                        takerBuyVolume = takerBuyVol
-                    )
+                    when {
+                        eventType == "kline" || data.has("k") -> {
+                            val kline = data.getJSONObject("k")
+                            val totalVol = kline.optString("v", "0.0").toDoubleOrNull() ?: 0.0
+                            val takerBuyVol = kline.optString("V", "0.0").toDoubleOrNull() ?: (totalVol / 2.0)
+                            val openTime = kline.optLong("t", System.currentTimeMillis())
 
-                    // Capture Initial Delta Sign on first incoming tick of a newly opened bar
-                    if (openTime != trackedCandleOpenTime) {
-                        trackedCandleOpenTime = openTime
-                        val initialDelta = takerBuyVol - (totalVol - takerBuyVol)
-                        _initialDeltaSign.value = when {
-                            initialDelta > 0.0 -> InitialDeltaSign.POSITIVE
-                            initialDelta < 0.0 -> InitialDeltaSign.NEGATIVE
-                            else -> InitialDeltaSign.WAITING
+                            val liveData = CandleOrderFlow(
+                                openTime = openTime,
+                                open = kline.optString("o", "0.0").toDoubleOrNull() ?: 0.0,
+                                high = kline.optString("h", "0.0").toDoubleOrNull() ?: 0.0,
+                                low = kline.optString("l", "0.0").toDoubleOrNull() ?: 0.0,
+                                close = kline.optString("c", "0.0").toDoubleOrNull() ?: 0.0,
+                                totalVolume = totalVol,
+                                takerBuyVolume = takerBuyVol
+                            )
+
+                            val lastTrackedTime = trackedCandleOpenTimes[sym] ?: 0L
+                            val initialDelta = if (openTime != lastTrackedTime) {
+                                trackedCandleOpenTimes[sym] = openTime
+                                val deltaVal = takerBuyVol - (totalVol - takerBuyVol)
+                                when {
+                                    deltaVal > 0.0 -> InitialDeltaSign.POSITIVE
+                                    deltaVal < 0.0 -> InitialDeltaSign.NEGATIVE
+                                    else -> InitialDeltaSign.WAITING
+                                }
+                            } else InitialDeltaSign.WAITING
+
+                            _symbolKlineTicks.tryEmit(SymbolKlineTick(sym, liveData, initialDelta))
+
+                            if (sym == viewSymbol) {
+                                _liveCandle.value = liveData
+                                if (initialDelta != InitialDeltaSign.WAITING) {
+                                    _initialDeltaSign.value = initialDelta
+                                }
+                            }
+                        }
+
+                        streamName.contains("@depth") || data.has("b") && data.has("a") -> {
+                            val now = System.currentTimeMillis()
+                            val lastFrameTime = lastDepthFrameTimesMs[sym] ?: 0L
+                            if (activeConnectionMode == ConnectionMode.CELLULAR && (now - lastFrameTime < 300L)) {
+                                return
+                            }
+                            lastDepthFrameTimesMs[sym] = now
+
+                            val bidsArray = data.optJSONArray("b")
+                            val asksArray = data.optJSONArray("a")
+
+                            var totalBidVol = 0.0
+                            if (bidsArray != null) {
+                                for (i in 0 until bidsArray.length()) {
+                                    val level = bidsArray.optJSONArray(i)
+                                    totalBidVol += level?.optString(1)?.toDoubleOrNull() ?: 0.0
+                                }
+                            }
+
+                            var totalAskVol = 0.0
+                            if (asksArray != null) {
+                                for (i in 0 until asksArray.length()) {
+                                    val level = asksArray.optJSONArray(i)
+                                    totalAskVol += level?.optString(1)?.toDoubleOrNull() ?: 0.0
+                                }
+                            }
+
+                            val totalVol = totalBidVol + totalAskVol
+                            if (totalVol > 0.0) {
+                                val bidPct = (totalBidVol / totalVol) * 100.0
+                                val askPct = (totalAskVol / totalVol) * 100.0
+                                val imbalance = OrderBookImbalance(
+                                    bidVolume = totalBidVol,
+                                    askVolume = totalAskVol,
+                                    bidPercentage = bidPct,
+                                    askPercentage = askPct
+                                )
+                                _symbolDepthTicks.tryEmit(SymbolDepthTick(sym, imbalance))
+                                if (sym == viewSymbol) {
+                                    _liveOrderBookImbalance.value = imbalance
+                                }
+                            }
+                        }
+
+                        eventType == "trade" || eventType == "aggTrade" || data.has("p") && data.has("q") -> {
+                            val price = data.optString("p", "0.0").toDoubleOrNull() ?: 0.0
+                            val qty = data.optString("q", "0.0").toDoubleOrNull() ?: 0.0
+                            val isBuyerMaker = data.optBoolean("m", false)
+                            val tradeTime = data.optLong("T", System.currentTimeMillis())
+
+                            if (price > 0.0 && qty > 0.0) {
+                                val tradeSnap = TradeSnapshot(
+                                    timestampMs = tradeTime,
+                                    price = price,
+                                    quantity = qty,
+                                    isBuyerMaker = isBuyerMaker
+                                )
+                                _symbolTradeTicks.tryEmit(SymbolTradeTick(sym, tradeSnap))
+                                if (sym == viewSymbol) {
+                                    _liveTrade.value = tradeSnap
+                                }
+                            } else {
+                                tradeParseFailures.incrementAndGet()
+                            }
                         }
                     }
-
-                    _liveCandle.value = liveData
-                    if (_connectionState.value !is WebSocketState.Connected) {
-                        _connectionState.value = WebSocketState.Connected
-                    }
-                } catch (_: Exception) {
-                    // Ignored or logged
+                } catch (e: Exception) {
+                    tradeParseFailures.incrementAndGet()
+                    _tradeLastError.value = e.message ?: "JSON parse error"
                 }
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 if (this@BinanceWebSocketManager.webSocket != webSocket) return
+                _tradeStreamStage.value = WsConnectionStage.DISCONNECTED
                 webSocket.close(1000, null)
                 handleDisconnect()
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 if (this@BinanceWebSocketManager.webSocket != webSocket) return
+                _tradeStreamStage.value = WsConnectionStage.DISCONNECTED
                 handleDisconnect()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 if (this@BinanceWebSocketManager.webSocket != webSocket) return
+                _tradeStreamStage.value = WsConnectionStage.ERROR
+                _tradeLastError.value = t.message ?: "Connection failure"
                 handleDisconnect()
             }
 
@@ -263,144 +408,6 @@ class BinanceWebSocketManager(
         })
 
         this.webSocket = currentWs
-
-        // 2. Parallel Depth WebSocket Stream - Adaptive based on ConnectionMode
-        val depthStreamSuffix = if (activeConnectionMode == ConnectionMode.CELLULAR) "@depth20@1000ms" else "@depth20@100ms"
-        val depthWsUrl = "wss://fstream.binance.com/ws/${lowerSymbol}$depthStreamSuffix"
-        val depthRequest = Request.Builder().url(depthWsUrl).build()
-
-        val currentDepthWs = client.newWebSocket(depthRequest, object : WebSocketListener() {
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                if (this@BinanceWebSocketManager.depthWebSocket != webSocket) return
-                try {
-                    // Socket Backpressure Filtering for Cellular Mode: Skip intermediate clumped frames (<300ms)
-                    val now = System.currentTimeMillis()
-                    if (activeConnectionMode == ConnectionMode.CELLULAR && (now - lastDepthFrameTimeMs < 300L)) {
-                        return
-                    }
-                    lastDepthFrameTimeMs = now
-
-                    val json = JSONObject(text)
-                    if (json.has("b") && json.has("a")) {
-                        val bidsArray = json.optJSONArray("b")
-                        val asksArray = json.optJSONArray("a")
-
-                        var totalBidVol = 0.0
-                        if (bidsArray != null) {
-                            for (i in 0 until bidsArray.length()) {
-                                val level = bidsArray.optJSONArray(i)
-                                val qty = level?.optString(1)?.toDoubleOrNull() ?: 0.0
-                                totalBidVol += qty
-                            }
-                        }
-
-                        var totalAskVol = 0.0
-                        if (asksArray != null) {
-                            for (i in 0 until asksArray.length()) {
-                                val level = asksArray.optJSONArray(i)
-                                val qty = level?.optString(1)?.toDoubleOrNull() ?: 0.0
-                                totalAskVol += qty
-                            }
-                        }
-
-                        val totalVol = totalBidVol + totalAskVol
-                        if (totalVol > 0.0) {
-                            val bidPct = (totalBidVol / totalVol) * 100.0
-                            val askPct = (totalAskVol / totalVol) * 100.0
-                            _liveOrderBookImbalance.value = OrderBookImbalance(
-                                bidVolume = totalBidVol,
-                                askVolume = totalAskVol,
-                                bidPercentage = bidPct,
-                                askPercentage = askPct
-                            )
-                        }
-                    }
-                } catch (_: Exception) {
-                    // Ignored or logged
-                }
-            }
-
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                if (this@BinanceWebSocketManager.depthWebSocket != webSocket) return
-                webSocket.close(1000, null)
-            }
-
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                // Handled gracefully
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                // Handled gracefully
-            }
-        })
-
-        this.depthWebSocket = currentDepthWs
-
-        // 3. Parallel Trades WebSocket Stream (@trade) for Live Order Flow Engine
-        val tradeStreamNameStr = "${lowerSymbol}@trade"
-        val aggTradeWsUrl = "wss://fstream.binance.com/ws/$tradeStreamNameStr"
-
-        _tradeSocketUrl.value = aggTradeWsUrl
-        _tradeStreamName.value = tradeStreamNameStr
-        _tradeStreamStage.value = WsConnectionStage.SOCKET_CREATING
-
-        val aggTradeRequest = Request.Builder().url(aggTradeWsUrl).build()
-
-        val currentTradeWs = client.newWebSocket(aggTradeRequest, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                if (this@BinanceWebSocketManager.tradeWebSocket != webSocket) return
-                _tradeStreamStage.value = WsConnectionStage.SOCKET_OPEN
-                _tradeStreamStage.value = WsConnectionStage.SUBSCRIBED
-            }
-
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                if (this@BinanceWebSocketManager.tradeWebSocket != webSocket) return
-                try {
-                    _tradeStreamStage.value = WsConnectionStage.RECEIVING_MESSAGES
-                    _rawLastMessage.value = if (text.length > 180) text.substring(0, 180) + "..." else text
-                    aggTradeMsgCount.incrementAndGet()
-
-                    val json = JSONObject(text)
-                    val price = json.optString("p", "0.0").toDoubleOrNull() ?: 0.0
-                    val qty = json.optString("q", "0.0").toDoubleOrNull() ?: 0.0
-                    val isBuyerMaker = json.optBoolean("m", false)
-                    val tradeTime = json.optLong("T", System.currentTimeMillis())
-
-                    if (price > 0.0 && qty > 0.0) {
-                        _liveTrade.value = TradeSnapshot(
-                            timestampMs = tradeTime,
-                            price = price,
-                            quantity = qty,
-                            isBuyerMaker = isBuyerMaker
-                        )
-                    } else {
-                        tradeParseFailures.incrementAndGet()
-                    }
-                } catch (e: Exception) {
-                    tradeParseFailures.incrementAndGet()
-                    _tradeLastError.value = e.message ?: "JSON parse error"
-                }
-            }
-
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                if (this@BinanceWebSocketManager.tradeWebSocket != webSocket) return
-                _tradeStreamStage.value = WsConnectionStage.DISCONNECTED
-                webSocket.close(1000, null)
-            }
-
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                if (this@BinanceWebSocketManager.tradeWebSocket != webSocket) return
-                _tradeStreamStage.value = WsConnectionStage.DISCONNECTED
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (this@BinanceWebSocketManager.tradeWebSocket != webSocket) return
-                _tradeStreamStage.value = WsConnectionStage.ERROR
-                _tradeLastError.value = t.message ?: "Connection failure"
-            }
-        })
-
-        this.tradeWebSocket = currentTradeWs
     }
 
     @Synchronized
@@ -440,21 +447,10 @@ class BinanceWebSocketManager(
         webSocket = null
         ws?.cancel()
 
-        val dWs = depthWebSocket
-        depthWebSocket = null
-        dWs?.cancel()
-
-        val tWs = tradeWebSocket
-        tradeWebSocket = null
-        tWs?.cancel()
-
         _connectionState.value = WebSocketState.Disconnected(null)
         _tradeStreamStage.value = WsConnectionStage.DISCONNECTED
     }
 
-    /**
-     * Cleans up coroutine scope resources when manager is no longer needed.
-     */
     fun close() {
         disconnect()
         scope.cancel()

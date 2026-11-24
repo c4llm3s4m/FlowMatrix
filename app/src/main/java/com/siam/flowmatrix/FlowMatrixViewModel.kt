@@ -55,6 +55,25 @@ class CardOrderPreferences(context: Context) {
     fun saveAppMode(mode: AppMode) {
         prefs.edit().putString("app_mode_v1", mode.id).apply()
     }
+
+    fun getWatchlist(): List<WatchlistItem> {
+        val savedString = prefs.getString("watchlist_v1", "") ?: ""
+        if (savedString.isBlank()) return emptyList()
+        return savedString.split(";").mapNotNull { token ->
+            val parts = token.split("|")
+            if (parts.size == 3) {
+                val sym = parts[0]
+                val created = parts[1].toLongOrNull() ?: 0L
+                val expires = parts[2].toLongOrNull() ?: 0L
+                if (sym.isNotBlank() && expires > 0L) WatchlistItem(sym, created, expires) else null
+            } else null
+        }
+    }
+
+    fun saveWatchlist(watchlist: List<WatchlistItem>) {
+        val stringToSave = watchlist.joinToString(";") { "${it.symbol}|${it.createdAtMs}|${it.expiresAtMs}" }
+        prefs.edit().putString("watchlist_v1", stringToSave).apply()
+    }
 }
 
 data class DashboardState(
@@ -81,6 +100,8 @@ data class DashboardState(
     val connectionMode: ConnectionMode = ConnectionMode.AUTO,
     val activeMode: ConnectionMode = ConnectionMode.BROADBAND,
     val appMode: AppMode = AppMode.GEMINI,
+    val watchlist: List<WatchlistItem> = emptyList(),
+    val watchlistError: String? = null,
     val error: String? = null
 )
 
@@ -114,5 +135,8 @@ class FlowMatrixViewModel(application: Application) : AndroidViewModel(applicati
     fun resetCardOrder() = TelemetryRepository.resetCardOrder()
     fun setSymbol(newSymbol: String) = TelemetryRepository.setSymbol(newSymbol)
     fun setTimeframe(newInterval: String) = TelemetryRepository.setTimeframe(newInterval)
+    fun addSymbolToWatchlist(symbol: String) = TelemetryRepository.addSymbolToWatchlist(symbol)
+    fun removeSymbolFromWatchlist(symbol: String) = TelemetryRepository.removeSymbolFromWatchlist(symbol)
+    fun clearWatchlistError() = TelemetryRepository.clearWatchlistError()
     fun refresh() = TelemetryRepository.refresh()
 }

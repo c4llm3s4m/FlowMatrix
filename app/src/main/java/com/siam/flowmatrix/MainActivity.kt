@@ -12,6 +12,8 @@ import androidx.activity.viewModels
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -107,6 +109,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
     var searchQuery by remember { mutableStateOf("") }
     var showCardVisibilityDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
+    var showAddSymbolDialog by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         // --- TOP BAR: TITLE, LIVE STATUS, CARDS & GEAR SETTINGS ---
@@ -135,7 +138,18 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
             }
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // --- 5-SYMBOL 24-HOUR WATCHLIST BAR ---
+        WatchlistBar(
+            watchlist = state.watchlist,
+            activeSymbol = state.symbol,
+            onSelectSymbol = { symbol -> viewModel.setSymbol(symbol) },
+            onAddSymbol = { showAddSymbolDialog = true },
+            onRemoveSymbol = { symbol -> viewModel.removeSymbolFromWatchlist(symbol) }
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
 
         // --- APP MODE SYSTEM SELECTOR (GEMINI MODE vs COPILOT MODE) ---
         Row(
@@ -165,7 +179,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it.uppercase() },
-                placeholder = { Text("Ticker (e.g. BTC, ETH, SOL)...") },
+                placeholder = { Text("Search contract (e.g. ETH, SOL, XRP)...") },
                 modifier = Modifier.weight(1f).height(52.dp),
                 singleLine = true,
                 shape = RoundedCornerShape(24.dp),
@@ -177,7 +191,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                     IconButton(onClick = {
                         if (searchQuery.isNotBlank()) {
                             val finalTicker = if (searchQuery.endsWith("USDT")) searchQuery else "${searchQuery}USDT"
-                            viewModel.setSymbol(finalTicker)
+                            viewModel.addSymbolToWatchlist(finalTicker)
                             searchQuery = ""
                         }
                     }) {
@@ -254,7 +268,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator()
                     Spacer(modifier = Modifier.height(12.dp))
-                    Text("Connecting to ${state.symbol} market data...", fontSize = 14.sp)
+                    Text("Connecting to ${state.symbol} market telemetry...", fontSize = 14.sp)
                 }
             }
         } else {
@@ -384,6 +398,64 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
         }
     }
 
+    // --- QUICK ADD SYMBOL DIALOG ---
+    if (showAddSymbolDialog) {
+        var addQuery by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showAddSymbolDialog = false },
+            title = {
+                Text("ADD CONTRACT TO WATCHLIST", fontWeight = FontWeight.Black, fontSize = 16.sp, color = MaterialTheme.colorScheme.primary)
+            },
+            text = {
+                Column {
+                    Text("Enter ticker symbol (e.g. ETH, SOL, XRP, AVAX). Max 5 active contracts.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = addQuery,
+                        onValueChange = { addQuery = it.uppercase() },
+                        placeholder = { Text("Ticker...") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (addQuery.isNotBlank()) {
+                        val finalTicker = if (addQuery.endsWith("USDT")) addQuery else "${addQuery}USDT"
+                        viewModel.addSymbolToWatchlist(finalTicker)
+                        showAddSymbolDialog = false
+                    }
+                }) {
+                    Text("ADD", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddSymbolDialog = false }) {
+                    Text("CANCEL", color = MaterialTheme.colorScheme.secondary)
+                }
+            }
+        )
+    }
+
+    // --- WATCHLIST HARD CAP WARNING DIALOG ---
+    if (state.watchlistError != null) {
+        AlertDialog(
+            onDismissRequest = { viewModel.clearWatchlistError() },
+            title = {
+                Text("⚠️ WATCHLIST LIMIT", fontWeight = FontWeight.Black, fontSize = 16.sp, color = MaterialTheme.colorScheme.error)
+            },
+            text = {
+                Text(state.watchlistError ?: "Watchlist hard cap reached.", fontSize = 13.sp)
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.clearWatchlistError() }) {
+                    Text("OK", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                }
+            }
+        )
+    }
+
     // --- CARD VISIBILITY SELECTION MODAL DIALOG ---
     if (showCardVisibilityDialog) {
         CardVisibilityDialog(
@@ -419,6 +491,83 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                 showSettingsDialog = false
             }
         )
+    }
+}
+
+// 5-Symbol 24-Hour Watchlist Bar
+@Composable
+fun WatchlistBar(
+    watchlist: List<WatchlistItem>,
+    activeSymbol: String,
+    onSelectSymbol: (String) -> Unit,
+    onAddSymbol: () -> Unit,
+    onRemoveSymbol: (String) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "WATCHLIST (${watchlist.size}/5)",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Black,
+                color = GoldNeutral
+            )
+            TextButton(
+                onClick = onAddSymbol,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+            ) {
+                Text("+ ADD CONTRACT", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            watchlist.forEach { item ->
+                val isSelected = item.symbol.equals(activeSymbol, ignoreCase = true)
+                val cleanDisplaySymbol = item.symbol.replace("USDT", "").replace("BUSD", "")
+
+                Surface(
+                    onClick = { onSelectSymbol(item.symbol) },
+                    color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = cleanDisplaySymbol,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = item.formattedTtl,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else Color.Gray
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "✕",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else Color.Gray,
+                            modifier = Modifier.clickable { onRemoveSymbol(item.symbol) }.padding(2.dp)
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1041,7 +1190,30 @@ fun FlowConsensusCard(
             modifier = Modifier.padding(bottom = 4.dp)
         )
 
-        // ROW 8: Narrative Text Explanation
+        // ROW 8: Order Flow Transition Pill (Rendered ONLY when transitionSignal != "NONE")
+        if (consensusState.transitionSignal != "NONE") {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Transition", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Surface(
+                    color = GoldNeutral.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = "${consensusState.transitionSignal} (${consensusState.transitionText})",
+                        color = GoldNeutral,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
+
+        // ROW 9: Narrative Text Explanation
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1059,7 +1231,7 @@ fun FlowConsensusCard(
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
 
-        // ROW 9: Last Consensus (Consensus Memory Engine)
+        // ROW 10: Last Consensus (Consensus Memory Engine)
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1088,7 +1260,7 @@ fun FlowConsensusCard(
             }
         }
 
-        // ROW 10: Last Narrative
+        // ROW 11: Last Narrative
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
