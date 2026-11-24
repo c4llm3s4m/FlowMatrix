@@ -76,11 +76,11 @@ object TelemetryExporter {
         sb.appendLine("  Real-Time Live Price  : ${formatPrice(liveP)}")
         if (activeCandle != null) {
             sb.appendLine("  Candle OHLC           : Open ${formatPrice(activeCandle.open)} | High ${formatPrice(activeCandle.high)} | Low ${formatPrice(activeCandle.low)} | Close ${formatPrice(activeCandle.close)}")
-            sb.appendLine("  Total Candle Volume   : %,.2f".format(activeCandle.totalVolume))
-            sb.appendLine("  Taker Buy Volume      : %,.2f".format(activeCandle.takerBuyVolume))
-            sb.appendLine("  Taker Sell Volume     : %,.2f".format(activeCandle.takerSellVolume))
-            sb.appendLine("  Candle Volume Delta   : %+,.2f".format(activeCandle.volumeDelta))
-            sb.appendLine("  Price Change %        : %+.2f%%".format(activeCandle.priceChangePercent))
+            sb.appendLine("  Total Candle Volume   : ${String.format(Locale.US, "%,.2f", activeCandle.totalVolume)}")
+            sb.appendLine("  Taker Buy Volume      : ${String.format(Locale.US, "%,.2f", activeCandle.takerBuyVolume)}")
+            sb.appendLine("  Taker Sell Volume     : ${String.format(Locale.US, "%,.2f", activeCandle.takerSellVolume)}")
+            sb.appendLine("  Candle Volume Delta   : ${String.format(Locale.US, "%+,.2f", activeCandle.volumeDelta)}")
+            sb.appendLine("  Price Change %        : ${String.format(Locale.US, "%+.2f%%", activeCandle.priceChangePercent)}")
         }
         sb.appendLine("  Initial Delta Sign    : ${session.initialDeltaSign.label}")
         sb.appendLine()
@@ -96,8 +96,9 @@ object TelemetryExporter {
         sb.appendLine("  Narrative             : ${fcState.narrative}")
         sb.appendLine("  Last Consensus        : ${fcState.previousConsensus ?: "NONE"} (${fcState.previousConsensusAgeFormatted ?: "--"})")
         sb.appendLine("  Consensus History Log :")
-        if (fcState.consensusHistory.isNotEmpty()) {
-            fcState.consensusHistory.forEach { evt ->
+        val hist = synchronized(session) { session.memoryHistoryList.toList() }
+        if (hist.isNotEmpty()) {
+            hist.forEach { evt ->
                 sb.appendLine("    - [${evt.timestampFormatted}] ${evt.consensus}")
             }
         } else {
@@ -108,11 +109,11 @@ object TelemetryExporter {
         sb.appendLine("4. SMART MONEY POSITION ENGINE (SMPE)")
         sb.appendLine("  Position Regime       : ${smpeState.regime}")
         sb.appendLine("  Dominance Ratio       : ${String.format(Locale.US, "%.2fx", smpeState.capitalRatio)} [${smpeState.dominance}]")
-        sb.appendLine("  Long Capital & Delta  : ${formatCompactUsdt(smpeState.longCapital)} (%+.2f%%)".format(smpeState.longCapitalDeltaPct))
-        sb.appendLine("  Short Capital & Delta : ${formatCompactUsdt(smpeState.shortCapital)} (%+.2f%%)".format(smpeState.shortCapitalDeltaPct))
+        sb.appendLine("  Long Capital & Delta  : ${formatCompactUsdt(smpeState.longCapital)} (${String.format(Locale.US, "%+.2f%%", smpeState.longCapitalDeltaPct)})")
+        sb.appendLine("  Short Capital & Delta : ${formatCompactUsdt(smpeState.shortCapital)} (${String.format(Locale.US, "%+.2f%%", smpeState.shortCapitalDeltaPct)})")
         sb.appendLine("  Net Inventory         : ${formatCompactUsdt(smpeState.netInventory)}")
-        sb.appendLine("  Inventory Momentum    : %+.2f%%".format(smpeState.inventoryMomentum))
-        sb.appendLine("  Position Share (L/S)  : %.2f%% Long / %.2f%% Short".format(smpeState.longPositionPct, smpeState.shortPositionPct))
+        sb.appendLine("  Inventory Momentum    : ${String.format(Locale.US, "%+.2f%%", smpeState.inventoryMomentum)}")
+        sb.appendLine("  Position Share (L/S)  : ${String.format(Locale.US, "%.2f%% Long / %.2f%% Short", smpeState.longPositionPct, smpeState.shortPositionPct)}")
         sb.appendLine("  Transition Label      : ${smpeState.transitionLabel ?: "NONE"}")
         sb.appendLine()
 
@@ -121,34 +122,34 @@ object TelemetryExporter {
         sb.appendLine("  Mechanics             : ${oiState.mechanics}")
         sb.appendLine("  Strength Level        : ${oiState.strength}")
         sb.appendLine("  CVD Confirmation      : ${oiState.confirmation ?: "NONE"}")
-        sb.appendLine("  Window Price Delta %  : %+.2f%%".format(oiState.priceDeltaPercent))
-        sb.appendLine("  OI Delta (Contracts)  : %+,.2f (%+.2f%%)".format(oiState.oiDeltaContracts, oiState.oiDeltaPercent))
+        sb.appendLine("  Window Price Delta %  : ${String.format(Locale.US, "%+.2f%%", oiState.priceDeltaPercent)}")
+        sb.appendLine("  OI Delta (Contracts)  : ${String.format(Locale.US, "%+,.2f (%+.2f%%)", oiState.oiDeltaContracts, oiState.oiDeltaPercent)}")
         sb.appendLine()
 
         sb.appendLine("6. ORDER FLOW REGIME (WYCKOFF V3.5)")
         sb.appendLine("  Active Flow Regime    : ${ofState.regime}")
-        sb.appendLine("  Effort vs Result      : ${ofState.effortLevel} EFFORT / ${ofState.resultLevel} RESULT (Ratio: %.2fx)".format(ofState.effortRatio))
-        sb.appendLine("  Flow Efficiency & St  : %.4f [%s]".format(ofState.flowEfficiency, ofState.efficiencyState))
-        sb.appendLine("  Dir Efficiency & Bias : %+.4f [%s]".format(ofState.directionalEfficiency, ofState.efficiencyBias))
+        sb.appendLine("  Effort vs Result      : ${ofState.effortLevel} EFFORT / ${ofState.resultLevel} RESULT (Ratio: ${String.format(Locale.US, "%.2fx", ofState.effortRatio)})")
+        sb.appendLine("  Flow Efficiency & St  : ${String.format(Locale.US, "%.4f", ofState.flowEfficiency)} [${ofState.efficiencyState}]")
+        sb.appendLine("  Dir Efficiency & Bias : ${String.format(Locale.US, "%+.4f", ofState.directionalEfficiency)} [${ofState.efficiencyBias}]")
         sb.appendLine("  Persistence & Momentum: ${ofState.persistenceState} (${ofState.persistenceCount}w) • ${ofState.regimeMomentum}")
         sb.appendLine("  Defense State         : ${ofState.defenseState}")
         sb.appendLine("  Transition Signal     : ${ofState.transitionSignal} (${ofState.transitionText})")
-        sb.appendLine("  Buy Volume            : %,.2f".format(ofState.buyVolume))
-        sb.appendLine("  Sell Volume           : %,.2f".format(ofState.sellVolume))
-        sb.appendLine("  Net Delta             : %+,.2f (%+.2f%%)".format(ofState.netDelta, ofState.deltaPercent))
-        sb.appendLine("  Price Delta %         : %+.2f%%".format(ofState.priceDeltaPercent))
+        sb.appendLine("  Buy Volume            : ${String.format(Locale.US, "%,.2f", ofState.buyVolume)}")
+        sb.appendLine("  Sell Volume           : ${String.format(Locale.US, "%,.2f", ofState.sellVolume)}")
+        sb.appendLine("  Net Delta             : ${String.format(Locale.US, "%+,.2f (%+.2f%%)", ofState.netDelta, ofState.deltaPercent)}")
+        sb.appendLine("  Price Delta %         : ${String.format(Locale.US, "%+.2f%%", ofState.priceDeltaPercent)}")
         sb.appendLine()
 
         sb.appendLine("7. MULTI-TIER POSITIONING & ORDER BOOK")
         if (matrix != null) {
             sb.appendLine("  Smart Money Sentiment : ${matrix.smartMoneySentiment.label}")
-            sb.appendLine("  Retail L/S Ratio      : %.2f [${matrix.retailSentiment.label}]".format(matrix.retailRatio))
-            sb.appendLine("  Whale Account L/S     : %.2f [${matrix.whaleAccountSentiment.label}]".format(matrix.whaleAccountRatio))
-            sb.appendLine("  Whale Position L/S    : %.2f [${matrix.whalePositionSentiment.label}]".format(matrix.whalePositionRatio))
+            sb.appendLine("  Retail L/S Ratio      : ${String.format(Locale.US, "%.2f", matrix.retailRatio)} [${matrix.retailSentiment.label}]")
+            sb.appendLine("  Whale Account L/S     : ${String.format(Locale.US, "%.2f", matrix.whaleAccountRatio)} [${matrix.whaleAccountSentiment.label}]")
+            sb.appendLine("  Whale Position L/S    : ${String.format(Locale.US, "%.2f", matrix.whalePositionRatio)} [${matrix.whalePositionSentiment.label}]")
         }
         if (depth != null) {
-            sb.appendLine("  Order Book Imbalance  : Bids %.2f%% / Asks %.2f%%".format(depth.bidPercentage, depth.askPercentage))
-            sb.appendLine("  Total Depth Volume    : Bids %,.2f / Asks %,.2f".format(depth.bidVolume, depth.askVolume))
+            sb.appendLine("  Order Book Imbalance  : ${String.format(Locale.US, "Bids %.2f%% / Asks %.2f%%", depth.bidPercentage, depth.askPercentage)}")
+            sb.appendLine("  Total Depth Volume    : ${String.format(Locale.US, "Bids %,.2f / Asks %,.2f", depth.bidVolume, depth.askVolume)}")
         }
         sb.appendLine()
 
