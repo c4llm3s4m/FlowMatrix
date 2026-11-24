@@ -158,7 +158,9 @@ object TelemetryExporter {
 
         sb.appendLine("--- CLOSED_ORDER_FLOW_WINDOWS_CSV ---")
         sb.appendLine("timestampMs,regime,effortRatio,flowEfficiency,directionalEfficiency,deltaPct,priceDeltaPct")
-        val tfBuffer = session.tfWindowBuffers[timeframe]
+        val tfBuffer = synchronized(session) {
+            session.tfWindowBuffers[timeframe]?.toList()
+        }
         if (tfBuffer != null && tfBuffer.isNotEmpty()) {
             tfBuffer.forEach { snap ->
                 sb.appendLine("${snap.timestampMs},${snap.regime},${snap.effortRatio},${snap.normalizedEfficiency},${snap.directionalEfficiency},${snap.deltaPct},${snap.priceDeltaPct}")

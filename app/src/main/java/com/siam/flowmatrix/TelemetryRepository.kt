@@ -600,6 +600,7 @@ object TelemetryRepository {
         }
     }
 
+    @Synchronized
     private fun emitActiveState() {
         val currSymbol = _activeSymbol.value
         val currInterval = _activeTimeframe.value
@@ -840,19 +841,21 @@ object TelemetryRepository {
 
         if (session != null && isNonNeutral && candidateConsensus != activeConsensus) {
             if (activeConsensus != "NEUTRAL" && activeConsensus != "BUILDING WINDOW") {
-                session.memoryLastConsensus = activeConsensus
-                session.memoryLastNarrative = _uiState.value.flowConsensus.narrative
-                session.memoryLastTimestampMs = now
-                session.memoryLastBadgeColor = _uiState.value.flowConsensus.badgeColor
+                synchronized(session) {
+                    session.memoryLastConsensus = activeConsensus
+                    session.memoryLastNarrative = _uiState.value.flowConsensus.narrative
+                    session.memoryLastTimestampMs = now
+                    session.memoryLastBadgeColor = _uiState.value.flowConsensus.badgeColor
 
-                val event = ConsensusHistoryEvent(
-                    timestampFormatted = timeFormatter.format(Date(now)),
-                    consensus = activeConsensus,
-                    badgeColor = _uiState.value.flowConsensus.badgeColor
-                )
-                session.memoryHistoryList.addFirst(event)
-                while (session.memoryHistoryList.size > 5) {
-                    session.memoryHistoryList.removeLast()
+                    val event = ConsensusHistoryEvent(
+                        timestampFormatted = timeFormatter.format(Date(now)),
+                        consensus = activeConsensus,
+                        badgeColor = _uiState.value.flowConsensus.badgeColor
+                    )
+                    session.memoryHistoryList.addFirst(event)
+                    while (session.memoryHistoryList.size > 5) {
+                        session.memoryHistoryList.removeLast()
+                    }
                 }
             }
         }
@@ -963,6 +966,12 @@ object TelemetryRepository {
             ruleFired = finalRule
         )
 
+        val memoryHistory = if (session != null) {
+            synchronized(session) {
+                session.memoryHistoryList.toList()
+            }
+        } else emptyList()
+
         return FlowConsensusState(
             consensus = finalConsensus,
             badgeColor = finalColor,
@@ -985,27 +994,29 @@ object TelemetryRepository {
             previousConsensusColor = session?.memoryLastBadgeColor ?: Color(0xFF9CA3AF),
             previousNarrative = session?.memoryLastNarrative,
             previousConsensusAgeFormatted = prevAgeStr,
-            consensusHistory = session?.memoryHistoryList?.toList() ?: emptyList(),
+            consensusHistory = memoryHistory,
             debugState = debugState
         )
     }
 
     private fun processSessionLiveTradeSnapshot(session: SymbolSession, trade: TradeSnapshot) {
-        session.tradeSnapshotBuffer.addLast(trade)
+        synchronized(session) {
+            session.tradeSnapshotBuffer.addLast(trade)
 
-        val now = System.currentTimeMillis()
-        session.lastTradeTimeMs = now
+            val now = System.currentTimeMillis()
+            session.lastTradeTimeMs = now
 
-        session.tradeRateWindow.addLast(now)
-        val rateCutoff = now - 1000L
-        while (session.tradeRateWindow.isNotEmpty() && session.tradeRateWindow.first() < rateCutoff) {
-            session.tradeRateWindow.removeFirst()
-        }
+            session.tradeRateWindow.addLast(now)
+            val rateCutoff = now - 1000L
+            while (session.tradeRateWindow.isNotEmpty() && session.tradeRateWindow.first() < rateCutoff) {
+                session.tradeRateWindow.removeFirst()
+            }
 
-        // Retain full 1 hour (3,600,000 ms) of trade snapshots in buffer so switching timeframes up to 1h never loses accumulated trades
-        val cutoffTime = now - 3_600_000L
-        while (session.tradeSnapshotBuffer.isNotEmpty() && session.tradeSnapshotBuffer.first().timestampMs < cutoffTime) {
-            session.tradeSnapshotBuffer.removeFirst()
+            // Retain full 1 hour (3,600,000 ms) of trade snapshots in buffer
+            val cutoffTime = now - 3_600_000L
+            while (session.tradeSnapshotBuffer.isNotEmpty() && session.tradeSnapshotBuffer.first().timestampMs < cutoffTime) {
+                session.tradeSnapshotBuffer.removeFirst()
+            }
         }
     }
 
@@ -1015,7 +1026,11 @@ object TelemetryRepository {
         val windowDurationMs = getTimeframeDurationMs(activeTf)
         val cutoffTime = now - windowDurationMs
 
-        val trades = session.tradeSnapshotBuffer.filter { it.timestampMs >= cutoffTime }
+        // THREAD SAFETY FIX 1: Defensive snapshot of tradeSnapshotBuffer inside synchronized(session)
+        val trades = synchronized(session) {
+            session.tradeSnapshotBuffer.filter { it.timestampMs >= cutoffTime }
+        }
+
         if (trades.isEmpty()) {
             return OrderFlowRegimeState(
                 buildingWindow = true,
@@ -1052,14 +1067,16 @@ object TelemetryRepository {
 
         val isBuilding = trades.size < 5
 
-        if (!isBuilding && totalVol > 0.0) {
-            session.volumeHistoryBuffer.addLast(totalVol)
-            while (session.volumeHistoryBuffer.size > 20) {
-                session.volumeHistoryBuffer.removeFirst()
+        val avgWindowVol = synchronized(session) {
+            if (!isBuilding && totalVol > 0.0) {
+                session.volumeHistoryBuffer.addLast(totalVol)
+                while (session.volumeHistoryBuffer.size > 20) {
+                    session.volumeHistoryBuffer.removeFirst()
+                }
             }
+            if (session.volumeHistoryBuffer.isNotEmpty()) session.volumeHistoryBuffer.average() else totalVol
         }
 
-        val avgWindowVol = if (session.volumeHistoryBuffer.isNotEmpty()) session.volumeHistoryBuffer.average() else totalVol
         val effortRatio = if (avgWindowVol > 0.0) totalVol / avgWindowVol else 1.0
         val priceEfficiency = if (abs(deltaPct) > 1.0) (priceDeltaPct / abs(deltaPct)) * 100.0 else 0.0
 
@@ -1149,84 +1166,122 @@ object TelemetryRepository {
             )
         }
 
-        val lastCommit = session.tfLastCommitMs[activeTf] ?: 0L
-        val activeBuffer = session.tfWindowBuffers[activeTf] ?: ArrayDeque()
-        val dirEffHist = session.dirEffBuffers[activeTf] ?: ArrayDeque()
+        val (previousRegimeStr, persistenceCount, regimeMomentumStr, defenseStateStr, absStreak, expStreak, vacStreak, bullScore, bearScore, currentTransSignal, currentTransText, currentLastNonBal) = synchronized(session) {
+            val lastCommit = session.tfLastCommitMs[activeTf] ?: 0L
+            val activeBuffer = session.tfWindowBuffers[activeTf] ?: ArrayDeque()
+            val dirEffHist = session.dirEffBuffers[activeTf] ?: ArrayDeque()
 
-        if (!isBuilding && now - lastCommit >= windowDurationMs) {
-            activeBuffer.addLast(
-                OrderFlowSnapshot(
-                    timestampMs = now,
-                    regime = regimeStr,
-                    effortRatio = effortRatio,
-                    normalizedEfficiency = flowEfficiency,
-                    directionalEfficiency = directionalEfficiency,
-                    deltaPct = deltaPct,
-                    priceDeltaPct = priceDeltaPct
+            if (!isBuilding && now - lastCommit >= windowDurationMs) {
+                activeBuffer.addLast(
+                    OrderFlowSnapshot(
+                        timestampMs = now,
+                        regime = regimeStr,
+                        effortRatio = effortRatio,
+                        normalizedEfficiency = flowEfficiency,
+                        directionalEfficiency = directionalEfficiency,
+                        deltaPct = deltaPct,
+                        priceDeltaPct = priceDeltaPct
+                    )
                 )
-            )
-            while (activeBuffer.size > 10) {
-                activeBuffer.removeFirst()
-            }
-
-            dirEffHist.addLast(directionalEfficiency)
-            while (dirEffHist.size > 10) {
-                dirEffHist.removeFirst()
-            }
-
-            val lastNonBal = session.lastNonBalancedRegimes[activeTf]
-            if (regimeStr != "BALANCED FLOW" && lastNonBal != null && lastNonBal != regimeStr) {
-                val (tSig, tTxt) = when {
-                    lastNonBal == "ASK ABSORPTION" && regimeStr == "THIN-ASK DRIFT" -> "BREAKOUT_RELEASE" to "Passive overhead supply exhausted"
-                    lastNonBal == "BID ABSORPTION" && regimeStr == "THIN-BID DROP" -> "SUPPORT_FAILURE" to "Passive bid support withdrawn"
-                    lastNonBal == "SHORT TRAP" && regimeStr == "EXPANSIVE BUYING" -> "SQUEEZE_IGNITION" to "Trapped shorts fueling initiative buying"
-                    lastNonBal == "LONG TRAP" && regimeStr == "EXPANSIVE SELLING" -> "CASCADE_IGNITION" to "Trapped longs fueling cascading supply"
-                    else -> "NONE" to "NONE"
+                while (activeBuffer.size > 10) {
+                    activeBuffer.removeFirst()
                 }
-                if (tSig != "NONE") {
-                    session.transitionSignalMap[activeTf] = tSig
-                    session.transitionTextMap[activeTf] = tTxt
-                    session.transitionHoldCountMap[activeTf] = 2
+
+                dirEffHist.addLast(directionalEfficiency)
+                while (dirEffHist.size > 10) {
+                    dirEffHist.removeFirst()
                 }
-            } else if ((session.transitionHoldCountMap[activeTf] ?: 0) > 0) {
-                val remaining = (session.transitionHoldCountMap[activeTf] ?: 1) - 1
-                session.transitionHoldCountMap[activeTf] = remaining
-                if (remaining == 0) {
-                    session.transitionSignalMap[activeTf] = "NONE"
-                    session.transitionTextMap[activeTf] = "NONE"
+
+                val lastNonBal = session.lastNonBalancedRegimes[activeTf]
+                if (regimeStr != "BALANCED FLOW" && lastNonBal != null && lastNonBal != regimeStr) {
+                    val (tSig, tTxt) = when {
+                        lastNonBal == "ASK ABSORPTION" && regimeStr == "THIN-ASK DRIFT" -> "BREAKOUT_RELEASE" to "Passive overhead supply exhausted"
+                        lastNonBal == "BID ABSORPTION" && regimeStr == "THIN-BID DROP" -> "SUPPORT_FAILURE" to "Passive bid support withdrawn"
+                        lastNonBal == "SHORT TRAP" && regimeStr == "EXPANSIVE BUYING" -> "SQUEEZE_IGNITION" to "Trapped shorts fueling initiative buying"
+                        lastNonBal == "LONG TRAP" && regimeStr == "EXPANSIVE SELLING" -> "CASCADE_IGNITION" to "Trapped longs fueling cascading supply"
+                        else -> "NONE" to "NONE"
+                    }
+                    if (tSig != "NONE") {
+                        session.transitionSignalMap[activeTf] = tSig
+                        session.transitionTextMap[activeTf] = tTxt
+                        session.transitionHoldCountMap[activeTf] = 2
+                    }
+                } else if ((session.transitionHoldCountMap[activeTf] ?: 0) > 0) {
+                    val remaining = (session.transitionHoldCountMap[activeTf] ?: 1) - 1
+                    session.transitionHoldCountMap[activeTf] = remaining
+                    if (remaining == 0) {
+                        session.transitionSignalMap[activeTf] = "NONE"
+                        session.transitionTextMap[activeTf] = "NONE"
+                    }
+                }
+
+                if (regimeStr != "BALANCED FLOW") {
+                    session.lastNonBalancedRegimes[activeTf] = regimeStr
+                }
+
+                session.tfLastCommitMs[activeTf] = now
+            }
+
+            val prevReg = if (activeBuffer.size >= 2) activeBuffer[activeBuffer.size - 2].regime else null
+
+            var pCount = 1
+            for (i in activeBuffer.indices.reversed()) {
+                if (i < activeBuffer.size - 1) {
+                    if (activeBuffer[i].regime == regimeStr) {
+                        pCount++
+                    } else break
                 }
             }
 
-            if (regimeStr != "BALANCED FLOW") {
-                session.lastNonBalancedRegimes[activeTf] = regimeStr
+            val rMom = if (pCount >= 3 && dirEffHist.size >= 3) {
+                val effSlope = dirEffHist.last() - dirEffHist[dirEffHist.size - 3]
+                val volSlope = if (activeBuffer.size >= 3) activeBuffer.last().effortRatio - activeBuffer[activeBuffer.size - 3].effortRatio else 0.0
+
+                when {
+                    pCount >= 6 && effSlope < -0.005 -> "EXHAUSTING ⚠"
+                    effSlope > 0.005 || (effSlope >= -0.005 && volSlope > 0.10) -> "STRENGTHENING ↑"
+                    effSlope < -0.005 && volSlope <= 0.0 -> "WEAKENING ↓"
+                    else -> "STABLE →"
+                }
+            } else {
+                "STABLE →"
             }
 
-            session.tfLastCommitMs[activeTf] = now
-        }
+            val last4 = activeBuffer.takeLast(4)
+            val bidHits = last4.count { it.regime == "BID ABSORPTION" || it.regime == "SHORT TRAP" }
+            val askHits = last4.count { it.regime == "ASK ABSORPTION" || it.regime == "LONG TRAP" }
 
-        val previousRegimeStr = if (activeBuffer.size >= 2) activeBuffer[activeBuffer.size - 2].regime else null
-
-        var persistenceCount = 1
-        for (i in activeBuffer.indices.reversed()) {
-            if (i < activeBuffer.size - 1) {
-                if (activeBuffer[i].regime == regimeStr) {
-                    persistenceCount++
-                } else break
+            val defState = when {
+                bidHits >= 3 -> "ACTIVE_BID_DEFENSE"
+                askHits >= 3 -> "ACTIVE_ASK_DEFENSE"
+                else -> "NONE"
             }
-        }
 
-        val regimeMomentumStr = if (persistenceCount >= 3 && dirEffHist.size >= 3) {
-            val effSlope = dirEffHist.last() - dirEffHist[dirEffHist.size - 3]
-            val volSlope = if (activeBuffer.size >= 3) activeBuffer.last().effortRatio - activeBuffer[activeBuffer.size - 3].effortRatio else 0.0
+            var aStreak = 0
+            var eStreak = 0
+            var vStreak = 0
 
-            when {
-                persistenceCount >= 6 && effSlope < -0.005 -> "EXHAUSTING ⚠"
-                effSlope > 0.005 || (effSlope >= -0.005 && volSlope > 0.10) -> "STRENGTHENING ↑"
-                effSlope < -0.005 && volSlope <= 0.0 -> "WEAKENING ↓"
-                else -> "STABLE →"
+            for (snap in activeBuffer.asReversed()) {
+                val r = snap.regime
+                if (r == "ASK ABSORPTION" || r == "BID ABSORPTION" || r == "LONG TRAP" || r == "SHORT TRAP") aStreak++ else break
             }
-        } else {
-            "STABLE →"
+            for (snap in activeBuffer.asReversed()) {
+                val r = snap.regime
+                if (r == "EXPANSIVE BUYING" || r == "EXPANSIVE SELLING") eStreak++ else break
+            }
+            for (snap in activeBuffer.asReversed()) {
+                val r = snap.regime
+                if (r == "THIN-ASK DRIFT" || r == "THIN-BID DROP") vStreak++ else break
+            }
+
+            val bScore = activeBuffer.count { it.regime in listOf("EXPANSIVE BUYING", "BID ABSORPTION", "SHORT TRAP", "THIN-ASK DRIFT") }
+            val brScore = activeBuffer.count { it.regime in listOf("EXPANSIVE SELLING", "ASK ABSORPTION", "LONG TRAP", "THIN-BID DROP") }
+
+            val cSig = session.transitionSignalMap[activeTf] ?: "NONE"
+            val cTxt = session.transitionTextMap[activeTf] ?: "NONE"
+            val cLastNonBal = session.lastNonBalancedRegimes[activeTf]
+
+            Tuple12(prevReg, pCount, rMom, defState, aStreak, eStreak, vStreak, bScore, brScore, cSig, cTxt, cLastNonBal)
         }
 
         val isExhausting = regimeMomentumStr == "EXHAUSTING ⚠"
@@ -1239,43 +1294,9 @@ object TelemetryRepository {
             else -> "DOMINANT"
         }
 
-        val last4 = activeBuffer.takeLast(4)
-        val bidDefenseHits = last4.count { it.regime == "BID ABSORPTION" || it.regime == "SHORT TRAP" }
-        val askDefenseHits = last4.count { it.regime == "ASK ABSORPTION" || it.regime == "LONG TRAP" }
-
-        val defenseStateStr = when {
-            bidDefenseHits >= 3 -> "ACTIVE_BID_DEFENSE"
-            askDefenseHits >= 3 -> "ACTIVE_ASK_DEFENSE"
-            else -> "NONE"
-        }
-
-        var absStreak = 0
-        var expStreak = 0
-        var vacStreak = 0
-
-        for (snap in activeBuffer.asReversed()) {
-            val r = snap.regime
-            if (r == "ASK ABSORPTION" || r == "BID ABSORPTION" || r == "LONG TRAP" || r == "SHORT TRAP") absStreak++ else break
-        }
-        for (snap in activeBuffer.asReversed()) {
-            val r = snap.regime
-            if (r == "EXPANSIVE BUYING" || r == "EXPANSIVE SELLING") expStreak++ else break
-        }
-        for (snap in activeBuffer.asReversed()) {
-            val r = snap.regime
-            if (r == "THIN-ASK DRIFT" || r == "THIN-BID DROP") vacStreak++ else break
-        }
-
-        val bullScore = activeBuffer.count { it.regime in listOf("EXPANSIVE BUYING", "BID ABSORPTION", "SHORT TRAP", "THIN-ASK DRIFT") }
-        val bearScore = activeBuffer.count { it.regime in listOf("EXPANSIVE SELLING", "ASK ABSORPTION", "LONG TRAP", "THIN-BID DROP") }
-
-        val currentTransSignal = session.transitionSignalMap[activeTf] ?: "NONE"
-        val currentTransText = session.transitionTextMap[activeTf] ?: "NONE"
-        val currentLastNonBal = session.lastNonBalancedRegimes[activeTf]
-
         val warnings = mutableListOf<String>()
         if (wsManager.tradeMsgCount == 0L) warnings.add("WARNING: No WS Messages")
-        if (session.tradeSnapshotBuffer.isEmpty()) warnings.add("WARNING: No Buffered Trades")
+        if (trades.isEmpty()) warnings.add("WARNING: No Buffered Trades")
         if (session.lastTradeTimeMs > 0 && (now - session.lastTradeTimeMs > 10_000L)) warnings.add("WARNING: Trade Stream Stalled")
 
         val debugState = OrderFlowRegimeDebugState(
@@ -1288,7 +1309,7 @@ object TelemetryRepository {
             lastSubscriptionTimeFormatted = if (wsManager.lastSubTimeMs > 0) timeFormatter.format(Date(wsManager.lastSubTimeMs)) else "--:--:--",
             lastError = wsManager.tradeLastError.value,
             messagesReceived = wsManager.tradeMsgCount,
-            messagesPerSecond = session.tradeRateWindow.size.toDouble(),
+            messagesPerSecond = synchronized(session) { session.tradeRateWindow.size.toDouble() },
             lastMessageTimestampFormatted = if (session.lastTradeTimeMs > 0L) millisFormatter.format(Date(session.lastTradeTimeMs)) else "--:--:--.---",
             msSinceLastMessage = if (session.lastTradeTimeMs > 0L) now - session.lastTradeTimeMs else 0L,
             rawMessagePreview = wsManager.rawLastMessage.value,
@@ -1366,20 +1387,25 @@ object TelemetryRepository {
         val now = System.currentTimeMillis()
         val targetDurationMs = getTimeframeDurationMs(activeTf)
 
-        val snapshotCount = session.snapshotBuffer.size
-        val oldestAgeSec = if (session.snapshotBuffer.isNotEmpty()) (now - session.snapshotBuffer.first().timestampMs) / 1000L else 0L
-
-        val anchorSnapshot = session.snapshotBuffer.lastOrNull { snapshot ->
-            (now - snapshot.timestampMs) >= targetDurationMs
+        // THREAD SAFETY FIX 2: Synchronized snapshot of snapshotBuffer
+        val (snapshotCount, oldestAgeSec) = synchronized(session) {
+            val count = session.snapshotBuffer.size
+            val oldest = if (session.snapshotBuffer.isNotEmpty()) (now - session.snapshotBuffer.first().timestampMs) / 1000L else 0L
+            count to oldest
+        }
+        val anchorSnapshot = synchronized(session) {
+            session.snapshotBuffer.lastOrNull { snapshot -> (now - snapshot.timestampMs) >= targetDurationMs }
         }
         val anchorAgeSec = if (anchorSnapshot != null) (now - anchorSnapshot.timestampMs) / 1000L else 0L
-        val latestAgeSec = if (session.snapshotBuffer.isNotEmpty()) (now - session.snapshotBuffer.last().timestampMs) / 1000L else 0L
+        val latestAgeSec = synchronized(session) {
+            if (session.snapshotBuffer.isNotEmpty()) (now - session.snapshotBuffer.last().timestampMs) / 1000L else 0L
+        }
 
         val currentPrice = if (session.livePrice > 0.0) session.livePrice else session.liveCandle?.close ?: session.klines.lastOrNull()?.close ?: 0.0
         val currentOi = session.openInterest.lastOrNull()?.sumOpenInterest?.toDoubleOrNull() ?: 0.0
 
         val warnings = mutableListOf<String>()
-        if (session.snapshotBuffer.isEmpty()) warnings.add("WARNING: Snapshot Buffer Empty")
+        if (snapshotCount == 0) warnings.add("WARNING: Snapshot Buffer Empty")
         if (anchorSnapshot == null) warnings.add("WARNING: Anchor Snapshot Missing / Window Building")
 
         if (anchorSnapshot == null || currentOi <= 0.0 || currentPrice <= 0.0) {
@@ -1514,7 +1540,7 @@ object TelemetryRepository {
         )
     }
 
-    // Fix 3: Pure read/calculation SMPE function (without calling addLast on smartMoneySnapshotBuffer)
+    // Fix 3: Pure read/calculation SMPE function with synchronized smartMoneySnapshotBuffer read
     private fun computeSmpeState(session: SymbolSession): SmpeUiState {
         val currentPrice = if (session.livePrice > 0.0) session.livePrice else session.liveCandle?.close ?: session.klines.lastOrNull()?.close ?: 0.0
         val oiValueStr = session.openInterest.lastOrNull()?.sumOpenInterestValue?.toDoubleOrNull()
@@ -1533,14 +1559,20 @@ object TelemetryRepository {
         val shortPositionPct = shortAccount * 100.0
 
         val now = System.currentTimeMillis()
-        val latestSmpeSnapshot = session.smartMoneySnapshotBuffer.lastOrNull()
-        val smpeBaseline = if (latestSmpeSnapshot != null) {
-            session.smartMoneySnapshotBuffer.lastOrNull { snapshot ->
-                snapshot.longPositionPct != latestSmpeSnapshot.longPositionPct ||
-                snapshot.shortPositionPct != latestSmpeSnapshot.shortPositionPct
-            } ?: session.smartMoneySnapshotBuffer.firstOrNull() ?: latestSmpeSnapshot
-        } else {
-            SmartMoneySnapshot(now, currentPrice, longCapital, shortCapital, longPositionPct, shortPositionPct, capitalRatio)
+
+        // THREAD SAFETY FIX 3: Defensive snapshot of smartMoneySnapshotBuffer
+        val (smpeCount, smpeBaseline) = synchronized(session) {
+            val count = session.smartMoneySnapshotBuffer.size
+            val latest = session.smartMoneySnapshotBuffer.lastOrNull()
+            val baseline = if (latest != null) {
+                session.smartMoneySnapshotBuffer.lastOrNull { snapshot ->
+                    snapshot.longPositionPct != latest.longPositionPct ||
+                    snapshot.shortPositionPct != latest.shortPositionPct
+                } ?: session.smartMoneySnapshotBuffer.firstOrNull() ?: latest
+            } else {
+                SmartMoneySnapshot(now, currentPrice, longCapital, shortCapital, longPositionPct, shortPositionPct, capitalRatio)
+            }
+            count to baseline
         }
 
         val longCapitalDelta = longCapital - smpeBaseline.longCapital
@@ -1586,7 +1618,7 @@ object TelemetryRepository {
             dominanceColor = dominanceColor,
             regime = smpeRegimeKey,
             regimeColor = smpeRegimeColor,
-            snapshotCount = session.smartMoneySnapshotBuffer.size,
+            snapshotCount = smpeCount,
             lastPollTimestampMs = now
         )
     }
@@ -1632,14 +1664,15 @@ object TelemetryRepository {
             session.lastOiPollTimeMs = now
 
             if (currentOi > 0.0 && currentPrice > 0.0) {
-                session.snapshotBuffer.addLast(FlowSnapshot(now, currentPrice, currentOi))
-                val maxHistoryCutoff = now - 7_200_000L
-                while (session.snapshotBuffer.isNotEmpty() && session.snapshotBuffer.first().timestampMs < maxHistoryCutoff) {
-                    session.snapshotBuffer.removeFirst()
+                synchronized(session) {
+                    session.snapshotBuffer.addLast(FlowSnapshot(now, currentPrice, currentOi))
+                    val maxHistoryCutoff = now - 7_200_000L
+                    while (session.snapshotBuffer.isNotEmpty() && session.snapshotBuffer.first().timestampMs < maxHistoryCutoff) {
+                        session.snapshotBuffer.removeFirst()
+                    }
                 }
             }
 
-            // Fix 3: Add SMPE snapshot to session buffer on REST poll completion
             val oiValueStr = oi.lastOrNull()?.sumOpenInterestValue?.toDoubleOrNull()
             val oiContracts = oi.lastOrNull()?.sumOpenInterest?.toDoubleOrNull() ?: 0.0
             val totalNotionalOI = oiValueStr ?: (oiContracts * currentPrice)
@@ -1653,19 +1686,21 @@ object TelemetryRepository {
             val capitalRatio = if (shortCapital > 0.0) longCapital / shortCapital else 0.0
 
             if (totalNotionalOI > 0.0 && currentPrice > 0.0) {
-                session.smartMoneySnapshotBuffer.addLast(
-                    SmartMoneySnapshot(
-                        timestampMs = now,
-                        price = currentPrice,
-                        longCapital = longCapital,
-                        shortCapital = shortCapital,
-                        longPositionPct = longAccount * 100.0,
-                        shortPositionPct = shortAccount * 100.0,
-                        capitalRatio = capitalRatio
+                synchronized(session) {
+                    session.smartMoneySnapshotBuffer.addLast(
+                        SmartMoneySnapshot(
+                            timestampMs = now,
+                            price = currentPrice,
+                            longCapital = longCapital,
+                            shortCapital = shortCapital,
+                            longPositionPct = longAccount * 100.0,
+                            shortPositionPct = shortAccount * 100.0,
+                            capitalRatio = capitalRatio
+                        )
                     )
-                )
-                while (session.smartMoneySnapshotBuffer.size > 20) {
-                    session.smartMoneySnapshotBuffer.removeFirst()
+                    while (session.smartMoneySnapshotBuffer.size > 20) {
+                        session.smartMoneySnapshotBuffer.removeFirst()
+                    }
                 }
             }
 
@@ -1676,4 +1711,9 @@ object TelemetryRepository {
     }
 }
 
+data class Tuple12<A, B, C, D, E, F, G, H, I, J, K, L>(
+    val first: A, val second: B, val third: C, val fourth: D,
+    val fifth: E, val sixth: F, val seventh: G, val eighth: H,
+    val ninth: I, val tenth: J, val eleventh: K, val twelfth: L
+)
 data class Quadruple<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
