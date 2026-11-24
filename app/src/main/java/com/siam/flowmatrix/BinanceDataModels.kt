@@ -23,6 +23,34 @@ data class WatchlistItem(
 }
 
 @Serializable
+data class PremiumIndexResponse(
+    val symbol: String = "",
+    val markPrice: String = "0.0",
+    val indexPrice: String = "0.0",
+    val estimatedSettlePrice: String = "0.0",
+    val lastFundingRate: String = "0.0",
+    val nextFundingTime: Long = 0L,
+    val interestRate: String = "0.0",
+    val time: Long = 0L
+) {
+    val markPriceDouble: Double get() = markPrice.toDoubleOrNull() ?: 0.0
+    val indexPriceDouble: Double get() = indexPrice.toDoubleOrNull() ?: 0.0
+    val fundingRatePct: Double get() = (lastFundingRate.toDoubleOrNull() ?: 0.0) * 100.0
+    val annualizedFundingPct: Double get() = fundingRatePct * 3.0 * 365.0
+    val markIndexBasis: Double get() = markPriceDouble - indexPriceDouble
+    val markIndexBasisPct: Double
+        get() = if (indexPriceDouble > 0.0) ((markPriceDouble - indexPriceDouble) / indexPriceDouble) * 100.0 else 0.0
+    val crowdingStatus: String
+        get() = when {
+            fundingRatePct >= 0.03 -> "CROWDED LONGS (ELEVATED +FUNDING)"
+            fundingRatePct <= -0.03 -> "CROWDED SHORTS (ELEVATED -FUNDING)"
+            fundingRatePct > 0.01 -> "MILD LONG BIAS"
+            fundingRatePct < -0.01 -> "MILD SHORT BIAS"
+            else -> "NEUTRAL FUNDING"
+        }
+}
+
+@Serializable
 data class OpenInterestHistResponse(
     val symbol: String,
     val sumOpenInterest: String,
@@ -156,7 +184,7 @@ data class OrderFlowSnapshot(
     val priceDeltaPct: Double
 )
 
-// 6. Dashboard Telemetry Card Types for Custom Ordering & Persistence (11 Cards Total)
+// 6. Dashboard Telemetry Card Types for Custom Ordering & Persistence (12 Cards Total)
 enum class TelemetryCardType(val id: String, val title: String) {
     INITIAL_PULSE("INITIAL_PULSE", "Initial Candle Volume Delta"),
     ORDER_BOOK_IMBALANCE("ORDER_BOOK_IMBALANCE", "Order Book Imbalance"),
@@ -165,6 +193,7 @@ enum class TelemetryCardType(val id: String, val title: String) {
     SMART_MONEY_POSITION("SMART_MONEY_POSITION", "Smart Money Position Engine"),
     LOCAL_AGGRESSION("LOCAL_AGGRESSION", "Local Aggression"),
     OPEN_INTEREST("OPEN_INTEREST", "Open Interest"),
+    FUNDING_RATE("FUNDING_RATE", "Funding Rate & Mark/Index Basis"),
     OI_FLOW_REGIME("OI_FLOW_REGIME", "OI Flow Regime (Live Delta)"),
     ORDER_FLOW_REGIME("ORDER_FLOW_REGIME", "Order Flow Regime (Live WS)"),
     FLOW_CONSENSUS("FLOW_CONSENSUS", "Flow Consensus Engine"),
@@ -179,6 +208,7 @@ enum class TelemetryCardType(val id: String, val title: String) {
             SMART_MONEY_POSITION,
             LOCAL_AGGRESSION,
             OPEN_INTEREST,
+            FUNDING_RATE,
             OI_FLOW_REGIME,
             ORDER_FLOW_REGIME,
             FLOW_CONSENSUS,

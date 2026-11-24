@@ -57,6 +57,7 @@ object TelemetryExporter {
         val smpeState = uiState.smpeUiState
         val matrix = uiState.positioningMatrix
         val depth = uiState.orderBookImbalance
+        val prem = uiState.premiumIndex ?: session.premiumIndex
 
         val sb = StringBuilder()
         sb.appendLine("================================================================================")
@@ -153,6 +154,20 @@ object TelemetryExporter {
         }
         sb.appendLine()
 
+        sb.appendLine("8. FUNDING RATE & MARK/INDEX BASIS")
+        if (prem != null) {
+            sb.appendLine("  Funding Rate          : ${String.format(Locale.US, "%+.4f%%", prem.fundingRatePct)} (Annualized: ${String.format(Locale.US, "%+.2f%%", prem.annualizedFundingPct)})")
+            sb.appendLine("  Crowding Status       : ${prem.crowdingStatus}")
+            sb.appendLine("  Mark Price            : ${formatPrice(prem.markPriceDouble)}")
+            sb.appendLine("  Index Price           : ${formatPrice(prem.indexPriceDouble)}")
+            sb.appendLine("  Mark/Index Basis      : ${String.format(Locale.US, "%+,.2f (%+.4f%%)", prem.markIndexBasis, prem.markIndexBasisPct)}")
+            val nextFundingStr = if (prem.nextFundingTime > 0) utcDateFormatter.format(Date(prem.nextFundingTime)) else "--:--:--"
+            sb.appendLine("  Next Funding Time     : $nextFundingStr")
+        } else {
+            sb.appendLine("  Funding Rate Data     : Awaiting Futures API response...")
+        }
+        sb.appendLine()
+
         sb.appendLine("================================================================================")
         sb.appendLine("                      EMBEDDED TIME-SERIES CSV APPENDIX                         ")
         sb.appendLine("================================================================================")
@@ -230,10 +245,18 @@ object TelemetryExporter {
     ): String {
         val sb = StringBuilder()
         val symbol = session.symbol
-        sb.appendLine("openTime,symbol,interval,open,high,low,close,totalVolume,takerBuyVolume,takerSellVolume,volumeDelta,priceChangePct,openInterest,notionalOi,consensus,intentState,smpeRegime,orderFlowRegime,directionalEfficiency")
+        sb.appendLine("openTime,symbol,interval,open,high,low,close,totalVolume,takerBuyVolume,takerSellVolume,volumeDelta,priceChangePct,openInterest,notionalOi,fundingRatePct,annualizedFunding,markPrice,indexPrice,markIndexBasisPct,fundingCrowding,consensus,intentState,smpeRegime,orderFlowRegime,directionalEfficiency")
 
         val latestOi = session.openInterest.lastOrNull()?.sumOpenInterest ?: "0"
         val latestNotionalOi = session.openInterest.lastOrNull()?.sumOpenInterestValue ?: "0"
+
+        val prem = uiState.premiumIndex ?: session.premiumIndex
+        val fundingRate = prem?.fundingRatePct ?: 0.0
+        val annFunding = prem?.annualizedFundingPct ?: 0.0
+        val markP = prem?.markPriceDouble ?: 0.0
+        val indexP = prem?.indexPriceDouble ?: 0.0
+        val basisPct = prem?.markIndexBasisPct ?: 0.0
+        val crowding = prem?.crowdingStatus ?: "NEUTRAL"
 
         val fc = uiState.flowConsensus
         val smpe = uiState.smpeUiState
@@ -243,14 +266,14 @@ object TelemetryExporter {
         if (candlesToExport.isNotEmpty()) {
             candlesToExport.forEach { c ->
                 sb.appendLine(
-                    "${c.openTime},$symbol,$timeframe,${c.open},${c.high},${c.low},${c.close},${c.totalVolume},${c.takerBuyVolume},${c.takerSellVolume},${c.volumeDelta},${c.priceChangePercent},$latestOi,$latestNotionalOi,${fc.consensus},${fc.intentState},${smpe.regime},${of.regime},${of.directionalEfficiency}"
+                    "${c.openTime},$symbol,$timeframe,${c.open},${c.high},${c.low},${c.close},${c.totalVolume},${c.takerBuyVolume},${c.takerSellVolume},${c.volumeDelta},${c.priceChangePercent},$latestOi,$latestNotionalOi,$fundingRate,$annFunding,$markP,$indexP,$basisPct,$crowding,${fc.consensus},${fc.intentState},${smpe.regime},${of.regime},${of.directionalEfficiency}"
                 )
             }
         } else {
             val now = System.currentTimeMillis()
             val liveP = if (session.livePrice > 0.0) session.livePrice else 0.0
             sb.appendLine(
-                "$now,$symbol,$timeframe,$liveP,$liveP,$liveP,$liveP,0,0,0,0,0,$latestOi,$latestNotionalOi,${fc.consensus},${fc.intentState},${smpe.regime},${of.regime},${of.directionalEfficiency}"
+                "$now,$symbol,$timeframe,$liveP,$liveP,$liveP,$liveP,0,0,0,0,0,$latestOi,$latestNotionalOi,$fundingRate,$annFunding,$markP,$indexP,$basisPct,$crowding,${fc.consensus},${fc.intentState},${smpe.regime},${of.regime},${of.directionalEfficiency}"
             )
         }
 

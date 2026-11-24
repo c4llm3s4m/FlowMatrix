@@ -21,6 +21,20 @@ class BinanceDataFetcher {
     private val futuresBaseUrl = "https://fapi.binance.com"
     private val spotBaseUrl = "https://api.binance.com"
 
+    suspend fun getPremiumIndex(symbol: String): PremiumIndexResponse? = withContext(Dispatchers.IO) {
+        val httpUrl = "$futuresBaseUrl/fapi/v1/premiumIndex".toHttpUrlOrNull()?.newBuilder()
+            ?.addQueryParameter("symbol", symbol)
+            ?.build() ?: throw IllegalArgumentException("Invalid URL")
+
+        val request = Request.Builder().url(httpUrl).build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return@withContext null
+            val body = response.body?.string() ?: "{}"
+            json.decodeFromString<PremiumIndexResponse>(body)
+        }
+    }
+
     suspend fun getOpenInterestHistory(symbol: String, period: String = "5m", limit: Int = 50): List<OpenInterestHistResponse> {
         return fetch("$futuresBaseUrl/futures/data/openInterestHist", symbol, period, limit)
     }

@@ -51,6 +51,14 @@ fun formatCompactUsdt(amount: Double): String {
     }
 }
 
+fun formatPrice(price: Double): String {
+    return if (price < 1.0) {
+        String.format(Locale.US, "$%.5f", price)
+    } else {
+        String.format(Locale.US, "$%,.2f", price)
+    }
+}
+
 fun checkIsIgnoringBatteryOptimizations(context: Context): Boolean {
     val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return false
     return pm.isIgnoringBatteryOptimizations(context.packageName)
@@ -232,7 +240,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
 
         val activeCandle = state.liveCandle ?: state.candles.lastOrNull()
 
-        // Filter cards based on User Hidden Cards Selection (All 11 cards render by default)
+        // Filter cards based on User Hidden Cards Selection (All cards render by default)
         val visibleCards = remember(state.cardOrder, state.hiddenCards) {
             state.cardOrder.filter { cardType ->
                 cardType !in state.hiddenCards
@@ -259,12 +267,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                         Text("Active Contract: ${state.symbol}", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                         val displayPrice = if (state.livePrice > 0.0) state.livePrice else activeCandle?.close ?: 0.0
                         if (displayPrice > 0.0) {
-                            val priceStr = if (displayPrice < 1.0) {
-                                String.format(Locale.US, "$%.5f", displayPrice)
-                            } else {
-                                String.format(Locale.US, "$%,.2f", displayPrice)
-                            }
-                            Text(priceStr, fontWeight = FontWeight.Black, fontSize = 20.sp, color = MaterialTheme.colorScheme.primary)
+                            Text(formatPrice(displayPrice), fontWeight = FontWeight.Black, fontSize = 20.sp, color = MaterialTheme.colorScheme.primary)
                         } else {
                             Text("Awaiting price...", fontSize = 14.sp, color = Color.Gray)
                         }
@@ -329,6 +332,13 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                         )
                         TelemetryCardType.OPEN_INTEREST -> OpenInterestCard(
                             openInterest = state.openInterest,
+                            isFirst = isFirst,
+                            isLast = isLast,
+                            onMoveUp = { viewModel.moveCardUp(cardType) },
+                            onMoveDown = { viewModel.moveCardDown(cardType) }
+                        )
+                        TelemetryCardType.FUNDING_RATE -> FundingRateCard(
+                            premiumIndex = state.premiumIndex,
                             isFirst = isFirst,
                             isLast = isLast,
                             onMoveUp = { viewModel.moveCardUp(cardType) },
@@ -478,6 +488,101 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                 showSettingsDialog = false
             }
         )
+    }
+}
+
+// Funding Rate & Mark/Index Basis Telemetry Card
+@Composable
+fun FundingRateCard(
+    premiumIndex: PremiumIndexResponse?,
+    isFirst: Boolean,
+    isLast: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit
+) {
+    MetricCard(
+        title = "Funding Rate & Mark/Index Basis",
+        isFirst = isFirst,
+        isLast = isLast,
+        onMoveUp = onMoveUp,
+        onMoveDown = onMoveDown
+    ) {
+        if (premiumIndex != null) {
+            val fundingPct = premiumIndex.fundingRatePct
+            val fundingColor = when {
+                fundingPct >= 0.03 -> GreenPositive
+                fundingPct <= -0.03 -> CoralNegative
+                fundingPct > 0.0 -> GreenPositive.copy(alpha = 0.8f)
+                fundingPct < 0.0 -> CoralNegative.copy(alpha = 0.8f)
+                else -> MaterialTheme.colorScheme.onSurface
+            }
+
+            // Row 1: Funding Rate & Crowding Badge
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Funding Rate (8h)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Surface(
+                    color = fundingColor.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = String.format(Locale.US, "%+.4f%%", fundingPct),
+                        color = fundingColor,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            // Row 2: Crowding Status
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Crowding Bias", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    text = premiumIndex.crowdingStatus,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = fundingColor
+                )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+            // Row 3: Annualized Rate
+            DataRow("Annualized Rate", String.format(Locale.US, "%+.2f%% / yr", premiumIndex.annualizedFundingPct), fundingColor)
+
+            // Row 4: Mark Price vs Index Price
+            DataRow("Mark Price", formatPrice(premiumIndex.markPriceDouble))
+            DataRow("Index Price (Spot)", formatPrice(premiumIndex.indexPriceDouble))
+
+            // Row 5: Mark/Index Basis
+            val basisColor = if (premiumIndex.markIndexBasis >= 0.0) GreenPositive else CoralNegative
+            DataRow(
+                label = "Mark/Index Basis",
+                value = String.format(Locale.US, "%+,.2f (%+.4f%%)", premiumIndex.markIndexBasis, premiumIndex.markIndexBasisPct),
+                valueColor = basisColor
+            )
+
+            // Row 6: Next Funding Countdown
+            val nextFundingMs = premiumIndex.nextFundingTime
+            val remainingMs = (nextFundingMs - System.currentTimeMillis()).coerceAtLeast(0L)
+            val remSec = remainingMs / 1000L
+            val hrs = remSec / 3600L
+            val mins = (remSec % 3600L) / 60L
+            val secs = remSec % 60L
+            val countdownStr = String.format(Locale.US, "%02dh %02dm %02ds", hrs, mins, secs)
+
+            DataRow("Next Funding In", countdownStr, GoldNeutral)
+        } else {
+            Text("Funding rate telemetry loading...", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 

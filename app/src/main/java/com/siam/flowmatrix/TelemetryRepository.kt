@@ -83,6 +83,7 @@ class SymbolSession(
     var smpeTransitionTimestampMs: Long? = null
 
     @Volatile var livePrice: Double = 0.0
+    @Volatile var premiumIndex: PremiumIndexResponse? = null
     @Volatile var klines: List<CandleOrderFlow> = emptyList()
     @Volatile var openInterest: List<OpenInterestHistResponse> = emptyList()
     @Volatile var takerLongShort: List<TakerLongShortRatioResponse> = emptyList()
@@ -316,6 +317,7 @@ object TelemetryRepository {
             livePrice = currentPrice,
             liveCandle = activeCandle,
             initialDeltaSign = session.initialDeltaSign,
+            premiumIndex = session.premiumIndex,
             openInterest = session.openInterest,
             takerLongShort = session.takerLongShort,
             globalLongShort = session.globalLongShort,
@@ -622,6 +624,7 @@ object TelemetryRepository {
                 livePrice = currentPrice,
                 liveCandle = activeCandle,
                 initialDeltaSign = session.initialDeltaSign,
+                premiumIndex = session.premiumIndex,
                 openInterest = session.openInterest,
                 takerLongShort = session.takerLongShort,
                 globalLongShort = session.globalLongShort,
@@ -1540,7 +1543,7 @@ object TelemetryRepository {
         )
     }
 
-    // Fix 3: Pure read/calculation SMPE function with synchronized smartMoneySnapshotBuffer read
+    // Pure read/calculation SMPE function with synchronized smartMoneySnapshotBuffer read
     private fun computeSmpeState(session: SymbolSession): SmpeUiState {
         val currentPrice = if (session.livePrice > 0.0) session.livePrice else session.liveCandle?.close ?: session.klines.lastOrNull()?.close ?: 0.0
         val oiValueStr = session.openInterest.lastOrNull()?.sumOpenInterestValue?.toDoubleOrNull()
@@ -1635,6 +1638,7 @@ object TelemetryRepository {
             val globalLSDeferred = async { runCatching { withTimeoutOrNull(2500L) { fetcher.getGlobalLongShortRatio(symbol, macroPeriod) } }.getOrNull() ?: emptyList() }
             val topAccountDeferred = async { runCatching { withTimeoutOrNull(2500L) { fetcher.getTopTraderAccountRatio(symbol, macroPeriod) } }.getOrNull() ?: emptyList() }
             val topPositionDeferred = async { runCatching { withTimeoutOrNull(2500L) { fetcher.getTopTraderPositionRatio(symbol, macroPeriod) } }.getOrNull() ?: emptyList() }
+            val premiumIndexDeferred = async { runCatching { withTimeoutOrNull(2000L) { fetcher.getPremiumIndex(symbol) } }.getOrNull() }
             val depthDeferred = async {
                 runCatching {
                     withTimeoutOrNull(2000L) { fetcher.getOrderBookDepth(symbol, limit = 20) }
@@ -1648,6 +1652,7 @@ object TelemetryRepository {
             val globalLS = globalLSDeferred.await()
             val topAccount = topAccountDeferred.await()
             val topPosition = topPositionDeferred.await()
+            val premiumIndex = premiumIndexDeferred.await()
             val depth = depthDeferred.await()
 
             session.klines = klines
@@ -1656,6 +1661,7 @@ object TelemetryRepository {
             session.globalLongShort = globalLS
             session.topTraderAccount = topAccount
             session.topTraderPosition = topPosition
+            session.premiumIndex = premiumIndex
             session.depth = depth
 
             val currentOi = oi.lastOrNull()?.sumOpenInterest?.toDoubleOrNull() ?: 0.0

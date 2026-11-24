@@ -71,6 +71,7 @@ data class DashboardState(
     val livePrice: Double = 0.0,
     val liveCandle: CandleOrderFlow? = null,
     val initialDeltaSign: InitialDeltaSign = InitialDeltaSign.WAITING,
+    val premiumIndex: PremiumIndexResponse? = null,
     val openInterest: List<OpenInterestHistResponse> = emptyList(),
     val takerLongShort: List<TakerLongShortRatioResponse> = emptyList(),
     val globalLongShort: List<GlobalLongShortRatioResponse> = emptyList(),
