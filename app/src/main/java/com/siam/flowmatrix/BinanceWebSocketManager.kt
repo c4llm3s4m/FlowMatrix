@@ -1,5 +1,6 @@
 package com.siam.flowmatrix
 
+import android.util.Log
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,6 +20,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Collections
 import java.util.Locale
@@ -70,6 +72,8 @@ class BinanceWebSocketManager(
     private val subscribedSymbols = Collections.synchronizedSet(LinkedHashSet<String>())
     @Volatile
     private var activeInterval: String = "5m"
+    @Volatile
+    private var subscribedInterval: String? = null
     @Volatile
     private var activeConnectionMode: ConnectionMode = ConnectionMode.AUTO
     @Volatile
@@ -150,6 +154,9 @@ class BinanceWebSocketManager(
         val cleanSet = symbols.map { it.trim().uppercase() }.filter { it.isNotBlank() }.toSet()
         if (cleanSet.isEmpty()) return
 
+        val intervalChanged = subscribedInterval != null && subscribedInterval != interval
+        val oldInterval = subscribedInterval ?: activeInterval
+
         activeInterval = interval
         activeConnectionMode = mode
         lastSubscriptionTimeMsVal = System.currentTimeMillis()
@@ -165,7 +172,15 @@ class BinanceWebSocketManager(
         if (ws != null && _connectionState.value is WebSocketState.Connected) {
             if (toRemove.isNotEmpty()) sendUnsubscribePayload(ws, toRemove)
             if (toAdd.isNotEmpty()) sendSubscribePayload(ws, toAdd)
+
+            // Fix 2: If timeframe interval changed while connected, update kline subscriptions
+            if (intervalChanged && cleanSet.isNotEmpty()) {
+                sendUnsubscribeKlines(ws, cleanSet, oldInterval)
+                sendSubscribeKlines(ws, cleanSet, interval)
+            }
+            subscribedInterval = interval
         } else {
+            subscribedInterval = interval
             connectInternal()
         }
     }
@@ -176,6 +191,7 @@ class BinanceWebSocketManager(
         syncSubscribedSymbols(currentSet, interval, mode)
     }
 
+    // Fix 1: Wrap params in org.json.JSONArray(params) so JSONObject serializes a valid JSON array
     private fun sendSubscribePayload(ws: WebSocket, symbols: Collection<String>) {
         if (symbols.isEmpty()) return
         val depthSuffix = if (activeConnectionMode == ConnectionMode.CELLULAR) "@depth20@1000ms" else "@depth20@100ms"
@@ -188,9 +204,10 @@ class BinanceWebSocketManager(
         }
         val json = JSONObject().apply {
             put("method", "SUBSCRIBE")
-            put("params", params)
+            put("params", JSONArray(params))
             put("id", System.currentTimeMillis() % 100000)
         }
+        Log.d("BinanceWS", "Sending SUBSCRIBE payload: $json")
         ws.send(json.toString())
     }
 
@@ -209,9 +226,40 @@ class BinanceWebSocketManager(
         }
         val json = JSONObject().apply {
             put("method", "UNSUBSCRIBE")
-            put("params", params)
+            put("params", JSONArray(params))
             put("id", System.currentTimeMillis() % 100000)
         }
+        Log.d("BinanceWS", "Sending UNSUBSCRIBE payload: $json")
+        ws.send(json.toString())
+    }
+
+    private fun sendSubscribeKlines(ws: WebSocket, symbols: Collection<String>, interval: String) {
+        if (symbols.isEmpty()) return
+        val params = mutableListOf<String>()
+        symbols.forEach { sym ->
+            params.add("${sym.lowercase()}@kline_$interval")
+        }
+        val json = JSONObject().apply {
+            put("method", "SUBSCRIBE")
+            put("params", JSONArray(params))
+            put("id", System.currentTimeMillis() % 100000)
+        }
+        Log.d("BinanceWS", "Sending SUBSCRIBE Klines payload: $json")
+        ws.send(json.toString())
+    }
+
+    private fun sendUnsubscribeKlines(ws: WebSocket, symbols: Collection<String>, interval: String) {
+        if (symbols.isEmpty()) return
+        val params = mutableListOf<String>()
+        symbols.forEach { sym ->
+            params.add("${sym.lowercase()}@kline_$interval")
+        }
+        val json = JSONObject().apply {
+            put("method", "UNSUBSCRIBE")
+            put("params", JSONArray(params))
+            put("id", System.currentTimeMillis() % 100000)
+        }
+        Log.d("BinanceWS", "Sending UNSUBSCRIBE Klines payload: $json")
         ws.send(json.toString())
     }
 
@@ -237,12 +285,14 @@ class BinanceWebSocketManager(
         val currentWs = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (this@BinanceWebSocketManager.webSocket != webSocket) return
+                Log.d("BinanceWS", "WebSocket connected onOpen")
                 reconnectAttempt = 0
                 _connectionState.value = WebSocketState.Connected
                 _tradeStreamStage.value = WsConnectionStage.SOCKET_OPEN
                 _tradeStreamStage.value = WsConnectionStage.SUBSCRIBED
 
                 // AUTO-RESUBVERTISE ALL ACTIVE SYMBOLS ON WEBSOCKET OPEN / RECONNECT
+                subscribedInterval = activeInterval
                 val symbolsToSub = subscribedSymbols.toSet().ifEmpty { setOf(viewSymbol) }
                 sendSubscribePayload(webSocket, symbolsToSub)
             }
@@ -380,8 +430,10 @@ class BinanceWebSocketManager(
                 }
             }
 
+            // Fix 1: Log code and reason in onClosing, onClosed, and onFailure
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 if (this@BinanceWebSocketManager.webSocket != webSocket) return
+                Log.w("BinanceWS", "WebSocket onClosing: code=$code, reason=$reason")
                 _tradeStreamStage.value = WsConnectionStage.DISCONNECTED
                 webSocket.close(1000, null)
                 handleDisconnect()
@@ -389,12 +441,14 @@ class BinanceWebSocketManager(
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 if (this@BinanceWebSocketManager.webSocket != webSocket) return
+                Log.w("BinanceWS", "WebSocket onClosed: code=$code, reason=$reason")
                 _tradeStreamStage.value = WsConnectionStage.DISCONNECTED
                 handleDisconnect()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 if (this@BinanceWebSocketManager.webSocket != webSocket) return
+                Log.e("BinanceWS", "WebSocket onFailure: message=${t.message}, response code=${response?.code}", t)
                 _tradeStreamStage.value = WsConnectionStage.ERROR
                 _tradeLastError.value = t.message ?: "Connection failure"
                 handleDisconnect()

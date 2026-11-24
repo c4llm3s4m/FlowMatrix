@@ -331,6 +331,14 @@ object TelemetryRepository {
         val effective = detectEffectiveMode(ctx, _uiState.value.connectionMode)
         wsManager.syncSubscribedSymbols(activeWatchlist.map { it.symbol }.toSet(), newInterval, effective)
 
+        // Fix 3: Trigger background REST fetch for active session's klines/macro series for the new interval without clearing buffers
+        val currentSession = activeSessions[_activeSymbol.value]
+        if (currentSession != null) {
+            scope.launch {
+                fetchSymbolDashboardData(currentSession)
+            }
+        }
+
         emitActiveState()
     }
 
@@ -396,7 +404,7 @@ object TelemetryRepository {
         val session = activeSessions.remove(formattedSymbol)
         session?.restPollingJob?.cancel()
 
-        // GRACEFUL EMPTY STATE HANDLING (REQUIREMENT 3: Prevent crash on empty list)
+        // GRACEFUL EMPTY STATE HANDLING (Prevent crash on empty list)
         if (activeWatchlist.isEmpty()) {
             val now = System.currentTimeMillis()
             val defaultItem = WatchlistItem("BTCUSDT", createdAtMs = now, expiresAtMs = now + 24 * 3600 * 1000L)
@@ -908,11 +916,8 @@ object TelemetryRepository {
             session.tradeRateWindow.removeFirst()
         }
 
-        val activeTf = _activeTimeframe.value
-        val thresholds = TimeframeThresholds.getThresholds(activeTf)
-        val windowDurationMs = getTimeframeDurationMs(activeTf)
-        val cutoffTime = now - windowDurationMs
-
+        // Fix 3: Retain full 1 hour (3,600,000 ms) of trade snapshots in buffer so switching timeframes up to 1h never loses accumulated trades
+        val cutoffTime = now - 3_600_000L
         while (session.tradeSnapshotBuffer.isNotEmpty() && session.tradeSnapshotBuffer.first().timestampMs < cutoffTime) {
             session.tradeSnapshotBuffer.removeFirst()
         }
@@ -1057,7 +1062,6 @@ object TelemetryRepository {
             )
         }
 
-        // REQUIREMENT 2: Zero-Reset Closed Window Commits
         val lastCommit = session.tfLastCommitMs[activeTf] ?: 0L
         val activeBuffer = session.tfWindowBuffers[activeTf] ?: ArrayDeque()
         val dirEffHist = session.dirEffBuffers[activeTf] ?: ArrayDeque()
