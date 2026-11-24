@@ -244,7 +244,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
             }
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                // Active Contract Header
+                // Active Contract Header with Real-Time Sub-Second Price Ticks
                 item(key = "header") {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -252,11 +252,12 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("Active Contract: ${state.symbol}", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                        if (activeCandle != null) {
-                            val priceStr = if (activeCandle.close < 1.0) {
-                                String.format(Locale.US, "$%.5f", activeCandle.close)
+                        val displayPrice = if (state.livePrice > 0.0) state.livePrice else activeCandle?.close ?: 0.0
+                        if (displayPrice > 0.0) {
+                            val priceStr = if (displayPrice < 1.0) {
+                                String.format(Locale.US, "$%.5f", displayPrice)
                             } else {
-                                String.format(Locale.US, "$%,.2f", activeCandle.close)
+                                String.format(Locale.US, "$%,.2f", displayPrice)
                             }
                             Text(priceStr, fontWeight = FontWeight.Black, fontSize = 20.sp, color = MaterialTheme.colorScheme.primary)
                         } else {

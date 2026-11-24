@@ -68,6 +68,7 @@ data class DashboardState(
     val interval: String = "5m",
     val isLoading: Boolean = true,
     val connectionStatus: String = "Initializing...",
+    val livePrice: Double = 0.0,
     val liveCandle: CandleOrderFlow? = null,
     val initialDeltaSign: InitialDeltaSign = InitialDeltaSign.WAITING,
     val openInterest: List<OpenInterestHistResponse> = emptyList(),

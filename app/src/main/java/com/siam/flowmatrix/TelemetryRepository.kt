@@ -82,6 +82,7 @@ class SymbolSession(
     var lastNonNeutralSmpeRegime: String? = null
     var smpeTransitionTimestampMs: Long? = null
 
+    @Volatile var livePrice: Double = 0.0
     @Volatile var klines: List<CandleOrderFlow> = emptyList()
     @Volatile var openInterest: List<OpenInterestHistResponse> = emptyList()
     @Volatile var takerLongShort: List<TakerLongShortRatioResponse> = emptyList()
@@ -116,6 +117,10 @@ object TelemetryRepository {
 
     private val _activeSymbol = MutableStateFlow("BTCUSDT")
     private val _activeTimeframe = MutableStateFlow("5m")
+
+    @Volatile
+    private var lastEmissionMs = 0L
+    private var pendingEmissionJob: Job? = null
 
     private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.US)
     private val millisFormatter = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
@@ -322,6 +327,7 @@ object TelemetryRepository {
         val effective = detectEffectiveMode(ctx, _uiState.value.connectionMode)
         wsManager.syncSubscribedSymbols(activeWatchlist.map { it.symbol }.toSet(), newInterval, effective)
 
+        // Fix 3: Trigger background REST fetch for active session's klines/macro series for the new interval without clearing buffers
         val currentSession = activeSessions[_activeSymbol.value]
         if (currentSession != null) {
             scope.launch {
@@ -432,6 +438,21 @@ object TelemetryRepository {
         }
     }
 
+    // Coalesced / Throttled UI State Emission (Max once per 150ms)
+    private fun scheduleThrottledEmission() {
+        val now = System.currentTimeMillis()
+        if (now - lastEmissionMs >= 150L) {
+            lastEmissionMs = now
+            emitActiveState()
+        } else if (pendingEmissionJob == null || pendingEmissionJob?.isCompleted == true) {
+            pendingEmissionJob = scope.launch {
+                delay(150L)
+                lastEmissionMs = System.currentTimeMillis()
+                emitActiveState()
+            }
+        }
+    }
+
     private fun listenToWebSocketStreams() {
         scope.launch {
             wsManager.symbolKlineTicks.collect { tick ->
@@ -442,7 +463,7 @@ object TelemetryRepository {
                     session.initialDeltaSign = tick.initialDelta
                 }
                 if (tick.symbol == _activeSymbol.value) {
-                    emitActiveState()
+                    scheduleThrottledEmission()
                 }
             }
         }
@@ -452,17 +473,34 @@ object TelemetryRepository {
                 val session = activeSessions[tick.symbol] ?: return@collect
                 session.liveOrderBookImbalance = tick.imbalance
                 if (tick.symbol == _activeSymbol.value) {
-                    emitActiveState()
+                    scheduleThrottledEmission()
                 }
             }
         }
 
+        // Fix 1: Real-time Price Ticks directly from @trade stream
         scope.launch {
             wsManager.symbolTradeTicks.collect { tick ->
                 val session = activeSessions[tick.symbol] ?: return@collect
+                session.livePrice = tick.trade.price
+                session.lastPriceTickTimeMs = System.currentTimeMillis()
+
+                val currentCandle = session.liveCandle
+                if (currentCandle != null) {
+                    session.liveCandle = currentCandle.copy(
+                        close = tick.trade.price,
+                        high = maxOf(currentCandle.high, tick.trade.price),
+                        low = minOf(currentCandle.low, tick.trade.price)
+                    )
+                }
+
                 processSessionLiveTradeSnapshot(session, tick.trade)
+
                 if (tick.symbol == _activeSymbol.value) {
-                    emitActiveState()
+                    // Fast real-time header price emission
+                    _uiState.update { it.copy(livePrice = tick.trade.price, liveCandle = session.liveCandle) }
+                    // Throttled full engine calculation
+                    scheduleThrottledEmission()
                 }
             }
         }
@@ -503,18 +541,26 @@ object TelemetryRepository {
         }
     }
 
+    // Fix 2: Single-pass engine calculation per emission
     private fun emitActiveState() {
         val currSymbol = _activeSymbol.value
         val currInterval = _activeTimeframe.value
         val session = activeSessions[currSymbol] ?: return
 
         val activeCandle = session.liveCandle ?: session.klines.lastOrNull()
+        val currentPrice = if (session.livePrice > 0.0) session.livePrice else activeCandle?.close ?: 0.0
+
+        val oiState = computeOiFlowRegimeState(session, currInterval)
+        val ofState = computeOrderFlowRegimeState(session, currInterval)
+        val smpeState = computeSmpeState(session)
+        val consensusState = evaluateFlowConsensus(oiState, ofState, smpeState)
 
         _uiState.update {
             it.copy(
                 symbol = currSymbol,
                 interval = currInterval,
                 isLoading = session.klines.isEmpty() && session.openInterest.isEmpty(),
+                livePrice = currentPrice,
                 liveCandle = activeCandle,
                 initialDeltaSign = session.initialDeltaSign,
                 openInterest = session.openInterest,
@@ -524,14 +570,10 @@ object TelemetryRepository {
                 topTraderPosition = session.topTraderPosition,
                 positioningMatrix = computePositioningMatrix(session),
                 orderBookImbalance = session.liveOrderBookImbalance ?: computeFallbackImbalance(session),
-                oiFlowRegime = computeOiFlowRegimeState(session, currInterval),
-                orderFlowRegime = computeOrderFlowRegimeState(session, currInterval),
-                flowConsensus = evaluateFlowConsensus(
-                    computeOiFlowRegimeState(session, currInterval),
-                    computeOrderFlowRegimeState(session, currInterval),
-                    computeSmpeState(session)
-                ),
-                smpeUiState = computeSmpeState(session),
+                oiFlowRegime = oiState,
+                orderFlowRegime = ofState,
+                flowConsensus = consensusState,
+                smpeUiState = smpeState,
                 candles = session.klines,
                 watchlist = activeWatchlist.toList(),
                 error = if (session.klines.isEmpty() && session.openInterest.isEmpty()) "Connecting to $currSymbol market telemetry..." else null
@@ -902,7 +944,7 @@ object TelemetryRepository {
             session.tradeRateWindow.removeFirst()
         }
 
-        // Fix 3: Retain full 1 hour (3,600,000 ms) of trade snapshots in buffer so switching timeframes up to 1h never loses accumulated trades
+        // Retain full 1 hour (3,600,000 ms) of trade snapshots in buffer so switching timeframes up to 1h never loses accumulated trades
         val cutoffTime = now - 3_600_000L
         while (session.tradeSnapshotBuffer.isNotEmpty() && session.tradeSnapshotBuffer.first().timestampMs < cutoffTime) {
             session.tradeSnapshotBuffer.removeFirst()
@@ -1178,7 +1220,6 @@ object TelemetryRepository {
         if (session.tradeSnapshotBuffer.isEmpty()) warnings.add("WARNING: No Buffered Trades")
         if (session.lastTradeTimeMs > 0 && (now - session.lastTradeTimeMs > 10_000L)) warnings.add("WARNING: Trade Stream Stalled")
 
-        // Cleanup #2: Restore full OrderFlowRegimeDebugState fields
         val debugState = OrderFlowRegimeDebugState(
             isDebugEnabled = _uiState.value.orderFlowRegime.debugState.isDebugEnabled,
             connectionStage = wsManager.tradeStreamStage.value,
@@ -1276,7 +1317,7 @@ object TelemetryRepository {
         val anchorAgeSec = if (anchorSnapshot != null) (now - anchorSnapshot.timestampMs) / 1000L else 0L
         val latestAgeSec = if (session.snapshotBuffer.isNotEmpty()) (now - session.snapshotBuffer.last().timestampMs) / 1000L else 0L
 
-        val currentPrice = session.liveCandle?.close ?: session.klines.lastOrNull()?.close ?: 0.0
+        val currentPrice = if (session.livePrice > 0.0) session.livePrice else session.liveCandle?.close ?: session.klines.lastOrNull()?.close ?: 0.0
         val currentOi = session.openInterest.lastOrNull()?.sumOpenInterest?.toDoubleOrNull() ?: 0.0
 
         val warnings = mutableListOf<String>()
@@ -1367,7 +1408,6 @@ object TelemetryRepository {
             else -> null
         }
 
-        // Cleanup #2: Restore full OiFlowRegimeDebugState fields
         val debugState = OiFlowRegimeDebugState(
             isDebugEnabled = _uiState.value.oiFlowRegime.debugState.isDebugEnabled,
             snapshotCount = snapshotCount,
@@ -1416,8 +1456,9 @@ object TelemetryRepository {
         )
     }
 
+    // Fix 3: Pure read/calculation SMPE function (without calling addLast on smartMoneySnapshotBuffer)
     private fun computeSmpeState(session: SymbolSession): SmpeUiState {
-        val currentPrice = session.liveCandle?.close ?: session.klines.lastOrNull()?.close ?: 0.0
+        val currentPrice = if (session.livePrice > 0.0) session.livePrice else session.liveCandle?.close ?: session.klines.lastOrNull()?.close ?: 0.0
         val oiValueStr = session.openInterest.lastOrNull()?.sumOpenInterestValue?.toDoubleOrNull()
         val oiContracts = session.openInterest.lastOrNull()?.sumOpenInterest?.toDoubleOrNull() ?: 0.0
         val totalNotionalOI = oiValueStr ?: (oiContracts * currentPrice)
@@ -1434,23 +1475,6 @@ object TelemetryRepository {
         val shortPositionPct = shortAccount * 100.0
 
         val now = System.currentTimeMillis()
-        if (totalNotionalOI > 0.0 && currentPrice > 0.0) {
-            session.smartMoneySnapshotBuffer.addLast(
-                SmartMoneySnapshot(
-                    timestampMs = now,
-                    price = currentPrice,
-                    longCapital = longCapital,
-                    shortCapital = shortCapital,
-                    longPositionPct = longPositionPct,
-                    shortPositionPct = shortPositionPct,
-                    capitalRatio = capitalRatio
-                )
-            )
-            while (session.smartMoneySnapshotBuffer.size > 20) {
-                session.smartMoneySnapshotBuffer.removeFirst()
-            }
-        }
-
         val latestSmpeSnapshot = session.smartMoneySnapshotBuffer.lastOrNull()
         val smpeBaseline = if (latestSmpeSnapshot != null) {
             session.smartMoneySnapshotBuffer.lastOrNull { snapshot ->
@@ -1545,7 +1569,7 @@ object TelemetryRepository {
             session.depth = depth
 
             val currentOi = oi.lastOrNull()?.sumOpenInterest?.toDoubleOrNull() ?: 0.0
-            val currentPrice = session.liveCandle?.close ?: klines.lastOrNull()?.close ?: 0.0
+            val currentPrice = if (session.livePrice > 0.0) session.livePrice else session.liveCandle?.close ?: klines.lastOrNull()?.close ?: 0.0
             val now = System.currentTimeMillis()
             session.lastOiPollTimeMs = now
 
@@ -1554,6 +1578,38 @@ object TelemetryRepository {
                 val maxHistoryCutoff = now - 7_200_000L
                 while (session.snapshotBuffer.isNotEmpty() && session.snapshotBuffer.first().timestampMs < maxHistoryCutoff) {
                     session.snapshotBuffer.removeFirst()
+                }
+            }
+
+            // Fix 3: Add SMPE snapshot to session buffer on REST poll completion
+            val oiValueStr = oi.lastOrNull()?.sumOpenInterestValue?.toDoubleOrNull()
+            val oiContracts = oi.lastOrNull()?.sumOpenInterest?.toDoubleOrNull() ?: 0.0
+            val totalNotionalOI = oiValueStr ?: (oiContracts * currentPrice)
+
+            val topPos = topPosition.lastOrNull()
+            val longAccount = topPos?.longAccount?.toDoubleOrNull() ?: 0.5
+            val shortAccount = topPos?.shortAccount?.toDoubleOrNull() ?: 0.5
+
+            val longCapital = totalNotionalOI * longAccount
+            val shortCapital = totalNotionalOI * shortAccount
+            val capitalRatio = if (shortCapital > 0.0) longCapital / shortCapital else 0.0
+            val longPositionPct = longAccount * 100.0
+            val shortPositionPct = shortAccount * 100.0
+
+            if (totalNotionalOI > 0.0 && currentPrice > 0.0) {
+                session.smartMoneySnapshotBuffer.addLast(
+                    SmartMoneySnapshot(
+                        timestampMs = now,
+                        price = currentPrice,
+                        longCapital = longCapital,
+                        shortCapital = shortCapital,
+                        longPositionPct = longPositionPct,
+                        shortPositionPct = shortPositionPct,
+                        capitalRatio = capitalRatio
+                    )
+                )
+                while (session.smartMoneySnapshotBuffer.size > 20) {
+                    session.smartMoneySnapshotBuffer.removeFirst()
                 }
             }
 
