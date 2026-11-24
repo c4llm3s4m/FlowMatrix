@@ -300,18 +300,52 @@ object TelemetryRepository {
     }
 
     // --- TELEMETRY EXPORT HELPERS ---
+    fun buildSessionSnapshotState(session: SymbolSession, interval: String): DashboardState {
+        val activeCandle = session.liveCandle ?: session.klines.lastOrNull()
+        val currentPrice = if (session.livePrice > 0.0) session.livePrice else activeCandle?.close ?: 0.0
+
+        val oiState = computeOiFlowRegimeState(session, interval)
+        val ofState = computeOrderFlowRegimeState(session, interval)
+        val smpeState = computeSmpeState(session)
+        val consensusState = evaluateFlowConsensus(oiState, ofState, smpeState)
+
+        return DashboardState(
+            symbol = session.symbol,
+            interval = interval,
+            isLoading = session.klines.isEmpty() && session.openInterest.isEmpty(),
+            livePrice = currentPrice,
+            liveCandle = activeCandle,
+            initialDeltaSign = session.initialDeltaSign,
+            openInterest = session.openInterest,
+            takerLongShort = session.takerLongShort,
+            globalLongShort = session.globalLongShort,
+            topTraderAccount = session.topTraderAccount,
+            topTraderPosition = session.topTraderPosition,
+            positioningMatrix = computePositioningMatrix(session),
+            orderBookImbalance = session.liveOrderBookImbalance ?: computeFallbackImbalance(session),
+            oiFlowRegime = oiState,
+            orderFlowRegime = ofState,
+            flowConsensus = consensusState,
+            smpeUiState = smpeState,
+            candles = session.klines,
+            watchlist = activeWatchlist.toList(),
+            activeMode = _uiState.value.activeMode
+        )
+    }
+
     fun buildActiveSymbolExport(format: ExportFormat): Pair<String, String> {
         val currSymbol = _activeSymbol.value
         val currInterval = _activeTimeframe.value
         val session = activeSessions[currSymbol] ?: SymbolSession(currSymbol)
+        val state = buildSessionSnapshotState(session, currInterval)
         val watchItem = activeWatchlist.firstOrNull { it.symbol == currSymbol }
         val ttl = watchItem?.formattedTtl ?: "24h 00m"
 
         val fileName = TelemetryExporter.generateFileName(currSymbol, currInterval, format)
         val content = if (format == ExportFormat.TXT_REPORT) {
-            TelemetryExporter.generateSingleSymbolReport(session, _uiState.value, currInterval, ttl)
+            TelemetryExporter.generateSingleSymbolReport(session, state, currInterval, ttl)
         } else {
-            TelemetryExporter.generateTabularCsvExport(session, _uiState.value, currInterval)
+            TelemetryExporter.generateTabularCsvExport(session, state, currInterval)
         }
         return fileName to content
     }
@@ -319,7 +353,12 @@ object TelemetryRepository {
     fun buildFullWatchlistExport(): Pair<String, String> {
         val currInterval = _activeTimeframe.value
         val fileName = TelemetryExporter.generateFileName("ALL", currInterval, ExportFormat.TXT_REPORT, isFullWatchlist = true)
-        val content = TelemetryExporter.generateFullWatchlistReport(activeSessions, activeWatchlist, _uiState.value, currInterval)
+
+        val sessionStates = activeSessions.mapValues { (_, session) ->
+            buildSessionSnapshotState(session, currInterval)
+        }
+
+        val content = TelemetryExporter.generateFullWatchlistReport(activeSessions, activeWatchlist, sessionStates, currInterval)
         return fileName to content
     }
 
@@ -1475,6 +1514,7 @@ object TelemetryRepository {
         )
     }
 
+    // Fix 3: Pure read/calculation SMPE function (without calling addLast on smartMoneySnapshotBuffer)
     private fun computeSmpeState(session: SymbolSession): SmpeUiState {
         val currentPrice = if (session.livePrice > 0.0) session.livePrice else session.liveCandle?.close ?: session.klines.lastOrNull()?.close ?: 0.0
         val oiValueStr = session.openInterest.lastOrNull()?.sumOpenInterestValue?.toDoubleOrNull()
@@ -1599,6 +1639,7 @@ object TelemetryRepository {
                 }
             }
 
+            // Fix 3: Add SMPE snapshot to session buffer on REST poll completion
             val oiValueStr = oi.lastOrNull()?.sumOpenInterestValue?.toDoubleOrNull()
             val oiContracts = oi.lastOrNull()?.sumOpenInterest?.toDoubleOrNull() ?: 0.0
             val totalNotionalOI = oiValueStr ?: (oiContracts * currentPrice)

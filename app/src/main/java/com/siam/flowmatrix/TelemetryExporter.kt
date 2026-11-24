@@ -27,6 +27,14 @@ object TelemetryExporter {
     private val localDateFormatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss z", Locale.US)
     private val fileTimestampFormatter = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
 
+    private fun formatPrice(price: Double): String {
+        return if (price < 1.0) {
+            String.format(Locale.US, "$%.5f", price)
+        } else {
+            String.format(Locale.US, "$%,.2f", price)
+        }
+    }
+
     fun generateFileName(symbol: String, timeframe: String, format: ExportFormat, isFullWatchlist: Boolean = false): String {
         val ts = fileTimestampFormatter.format(Date())
         val nameTag = if (isFullWatchlist) "WATCHLIST_FULL" else "${symbol}_$timeframe"
@@ -65,13 +73,13 @@ object TelemetryExporter {
 
         sb.appendLine("2. PRICE & INITIAL PULSE")
         val liveP = if (session.livePrice > 0.0) session.livePrice else activeCandle?.close ?: 0.0
-        sb.appendLine("  Real-Time Live Price  : ${String.format(Locale.US, "$%,.2f", liveP)}")
+        sb.appendLine("  Real-Time Live Price  : ${formatPrice(liveP)}")
         if (activeCandle != null) {
-            sb.appendLine("  Candle OHLC           : Open $%,.2f | High $%,.2f | Low $%,.2f | Close $%,.2f".format(activeCandle.open, activeCandle.high, activeCandle.low, activeCandle.close))
+            sb.appendLine("  Candle OHLC           : Open ${formatPrice(activeCandle.open)} | High ${formatPrice(activeCandle.high)} | Low ${formatPrice(activeCandle.low)} | Close ${formatPrice(activeCandle.close)}")
             sb.appendLine("  Total Candle Volume   : %,.2f".format(activeCandle.totalVolume))
             sb.appendLine("  Taker Buy Volume      : %,.2f".format(activeCandle.takerBuyVolume))
             sb.appendLine("  Taker Sell Volume     : %,.2f".format(activeCandle.takerSellVolume))
-            sb.appendLine("  Candle Volume Delta   : %+,2f".format(activeCandle.volumeDelta))
+            sb.appendLine("  Candle Volume Delta   : %+,.2f".format(activeCandle.volumeDelta))
             sb.appendLine("  Price Change %        : %+.2f%%".format(activeCandle.priceChangePercent))
         }
         sb.appendLine("  Initial Delta Sign    : ${session.initialDeltaSign.label}")
@@ -114,7 +122,7 @@ object TelemetryExporter {
         sb.appendLine("  Strength Level        : ${oiState.strength}")
         sb.appendLine("  CVD Confirmation      : ${oiState.confirmation ?: "NONE"}")
         sb.appendLine("  Window Price Delta %  : %+.2f%%".format(oiState.priceDeltaPercent))
-        sb.appendLine("  OI Delta (Contracts)  : %+,2f (%+.2f%%)".format(oiState.oiDeltaContracts, oiState.oiDeltaPercent))
+        sb.appendLine("  OI Delta (Contracts)  : %+,.2f (%+.2f%%)".format(oiState.oiDeltaContracts, oiState.oiDeltaPercent))
         sb.appendLine()
 
         sb.appendLine("6. ORDER FLOW REGIME (WYCKOFF V3.5)")
@@ -127,7 +135,7 @@ object TelemetryExporter {
         sb.appendLine("  Transition Signal     : ${ofState.transitionSignal} (${ofState.transitionText})")
         sb.appendLine("  Buy Volume            : %,.2f".format(ofState.buyVolume))
         sb.appendLine("  Sell Volume           : %,.2f".format(ofState.sellVolume))
-        sb.appendLine("  Net Delta             : %+,2f (%+.2f%%)".format(ofState.netDelta, ofState.deltaPercent))
+        sb.appendLine("  Net Delta             : %+,.2f (%+.2f%%)".format(ofState.netDelta, ofState.deltaPercent))
         sb.appendLine("  Price Delta %         : %+.2f%%".format(ofState.priceDeltaPercent))
         sb.appendLine()
 
@@ -187,7 +195,7 @@ object TelemetryExporter {
     fun generateFullWatchlistReport(
         sessions: Map<String, SymbolSession>,
         watchlist: List<WatchlistItem>,
-        uiState: DashboardState,
+        sessionStates: Map<String, DashboardState>,
         timeframe: String
     ): String {
         val sb = StringBuilder()
@@ -200,11 +208,12 @@ object TelemetryExporter {
 
         watchlist.forEachIndexed { idx, item ->
             val session = sessions[item.symbol]
-            if (session != null) {
+            val state = sessionStates[item.symbol]
+            if (session != null && state != null) {
                 sb.appendLine("################################################################################")
                 sb.appendLine("CONTRACT #${idx + 1}: ${item.symbol} (TTL Remaining: ${item.formattedTtl})")
                 sb.appendLine("################################################################################")
-                sb.appendLine(generateSingleSymbolReport(session, uiState, timeframe, item.formattedTtl))
+                sb.appendLine(generateSingleSymbolReport(session, state, timeframe, item.formattedTtl))
                 sb.appendLine()
             }
         }
