@@ -56,7 +56,6 @@ object TelemetryExporter {
         val fcState = uiState.flowConsensus
         val smpeState = uiState.smpeUiState
         val matrix = uiState.positioningMatrix
-        val depth = uiState.orderBookImbalance
         val prem = uiState.premiumIndex ?: session.premiumIndex
 
         val sb = StringBuilder()
@@ -72,7 +71,7 @@ object TelemetryExporter {
         sb.appendLine("  Watchlist TTL         : $watchlistTtl")
         sb.appendLine()
 
-        sb.appendLine("2. PRICE & INITIAL PULSE")
+        sb.appendLine("2. PRICE & REAL-TIME SUMMARY")
         val liveP = if (session.livePrice > 0.0) session.livePrice else activeCandle?.close ?: 0.0
         sb.appendLine("  Real-Time Live Price  : ${formatPrice(liveP)}")
         if (activeCandle != null) {
@@ -83,7 +82,6 @@ object TelemetryExporter {
             sb.appendLine("  Candle Volume Delta   : ${String.format(Locale.US, "%+,.2f", activeCandle.volumeDelta)}")
             sb.appendLine("  Price Change %        : ${String.format(Locale.US, "%+.2f%%", activeCandle.priceChangePercent)}")
         }
-        sb.appendLine("  Initial Delta Sign    : ${session.initialDeltaSign.label}")
         sb.appendLine()
 
         sb.appendLine("3. FLOW CONSENSUS & INTENT ENGINE")
@@ -141,16 +139,12 @@ object TelemetryExporter {
         sb.appendLine("  Price Delta %         : ${String.format(Locale.US, "%+.2f%%", ofState.priceDeltaPercent)}")
         sb.appendLine()
 
-        sb.appendLine("7. MULTI-TIER POSITIONING & ORDER BOOK")
+        sb.appendLine("7. MULTI-TIER POSITIONING")
         if (matrix != null) {
             sb.appendLine("  Smart Money Sentiment : ${matrix.smartMoneySentiment.label}")
             sb.appendLine("  Retail L/S Ratio      : ${String.format(Locale.US, "%.2f", matrix.retailRatio)} [${matrix.retailSentiment.label}]")
             sb.appendLine("  Whale Account L/S     : ${String.format(Locale.US, "%.2f", matrix.whaleAccountRatio)} [${matrix.whaleAccountSentiment.label}]")
             sb.appendLine("  Whale Position L/S    : ${String.format(Locale.US, "%.2f", matrix.whalePositionRatio)} [${matrix.whalePositionSentiment.label}]")
-        }
-        if (depth != null) {
-            sb.appendLine("  Order Book Imbalance  : ${String.format(Locale.US, "Bids %.2f%% / Asks %.2f%%", depth.bidPercentage, depth.askPercentage)}")
-            sb.appendLine("  Total Depth Volume    : ${String.format(Locale.US, "Bids %,.2f / Asks %,.2f", depth.bidVolume, depth.askVolume)}")
         }
         sb.appendLine()
 
@@ -280,17 +274,14 @@ object TelemetryExporter {
         return sb.toString()
     }
 
-    // Helper to share content via FileProvider and MediaStore export
     fun exportAndShareFile(context: Context, fileName: String, fileContent: String, format: ExportFormat) {
         try {
-            // 1. Write to Cache Directory for FileProvider Sharing
             val exportsDir = File(context.cacheDir, "exports")
             if (!exportsDir.exists()) exportsDir.mkdirs()
 
             val file = File(exportsDir, fileName)
             file.writeText(fileContent)
 
-            // 2. Save directly to Downloads/FlowMatrix/ via MediaStore on Android 10+ (API 29+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val resolver = context.contentResolver
                 val contentValues = ContentValues().apply {
@@ -306,7 +297,6 @@ object TelemetryExporter {
                 }
             }
 
-            // 3. Launch Native Android Share Sheet via FileProvider
             val contentUri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                 type = format.mimeType

@@ -75,7 +75,6 @@ data class GlobalLongShortRatioResponse(
     val timestamp: Long
 )
 
-// 1. Top Trader (Whale) Account & Position Ratio Response
 @Serializable
 data class TopTraderLongShortRatioResponse(
     val symbol: String,
@@ -85,15 +84,13 @@ data class TopTraderLongShortRatioResponse(
     val timestamp: Long
 )
 
-// 2. Order Book Depth Response (Binance /fapi/v1/depth)
 @Serializable
 data class OrderBookDepthResponse(
     val lastUpdateId: Long = 0,
-    val bids: List<List<String>> = emptyList(), // Each item is [Price, Quantity]
+    val bids: List<List<String>> = emptyList(),
     val asks: List<List<String>> = emptyList()
 )
 
-// 3. Clean Order Book Imbalance Model (e.g., 47.87% Bids vs 52.13% Asks)
 data class OrderBookImbalance(
     val bidVolume: Double = 0.0,
     val askVolume: Double = 0.0,
@@ -103,14 +100,12 @@ data class OrderBookImbalance(
     val isBidDominant: Boolean get() = bidPercentage > askPercentage
 }
 
-// 4. Initial Candle Volume Delta Sign
 enum class InitialDeltaSign(val label: String) {
     WAITING("WAITING..."),
     POSITIVE("POSITIVE (+)"),
     NEGATIVE("NEGATIVE (-)")
 }
 
-// 5. Sentiment & Multi-Tier Positioning Matrix
 enum class SentimentTag(val label: String, val isBullish: Boolean) {
     EXTREMELY_BULLISH("Extremely Bullish", true),
     BULLISH("Bullish", true),
@@ -139,8 +134,6 @@ data class PositioningMatrix(
     val whaleAccountSentiment: SentimentTag get() = classifyRatio(whaleAccountRatio)
     val whalePositionSentiment: SentimentTag get() = classifyRatio(whalePositionRatio)
 
-    // Smart Money Sentiment: Flips to Extremely Bearish when Retail is crowded Long (>1.5)
-    // and out-leveraging actual Whale Position size (classic distribution/trap signature)
     val smartMoneySentiment: SentimentTag
         get() = when {
             retailRatio >= 1.50 && whalePositionRatio < retailRatio -> SentimentTag.EXTREMELY_BEARISH
@@ -151,7 +144,6 @@ data class PositioningMatrix(
         }
 }
 
-// Timeframe-Aware Threshold Scaler for Wyckoff Effort vs Result Mechanics
 data class TimeframeThresholds(
     val timeframe: String,
     val absorptionMaxPricePct: Double,
@@ -173,7 +165,6 @@ data class TimeframeThresholds(
     }
 }
 
-// Per-Timeframe Order Flow Snapshot for Window-Commit Memory Buffers (V3.5 Engine)
 data class OrderFlowSnapshot(
     val timestampMs: Long,
     val regime: String,
@@ -184,14 +175,10 @@ data class OrderFlowSnapshot(
     val priceDeltaPct: Double
 )
 
-// 6. Dashboard Telemetry Card Types for Custom Ordering & Persistence (12 Cards Total)
 enum class TelemetryCardType(val id: String, val title: String) {
-    INITIAL_PULSE("INITIAL_PULSE", "Initial Candle Volume Delta"),
-    ORDER_BOOK_IMBALANCE("ORDER_BOOK_IMBALANCE", "Order Book Imbalance"),
     POSITIONING_MATRIX("POSITIONING_MATRIX", "Multi-Tier Positioning & Smart Money"),
     POSITIONING_RATIO("POSITIONING_RATIO", "Positioning Ratio"),
     SMART_MONEY_POSITION("SMART_MONEY_POSITION", "Smart Money Position Engine"),
-    LOCAL_AGGRESSION("LOCAL_AGGRESSION", "Local Aggression"),
     OPEN_INTEREST("OPEN_INTEREST", "Open Interest"),
     FUNDING_RATE("FUNDING_RATE", "Funding Rate & Mark/Index Basis"),
     OI_FLOW_REGIME("OI_FLOW_REGIME", "OI Flow Regime (Live Delta)"),
@@ -201,12 +188,9 @@ enum class TelemetryCardType(val id: String, val title: String) {
 
     companion object {
         val DEFAULT_ORDER = listOf(
-            INITIAL_PULSE,
-            ORDER_BOOK_IMBALANCE,
             POSITIONING_MATRIX,
             POSITIONING_RATIO,
             SMART_MONEY_POSITION,
-            LOCAL_AGGRESSION,
             OPEN_INTEREST,
             FUNDING_RATE,
             OI_FLOW_REGIME,
@@ -219,7 +203,6 @@ enum class TelemetryCardType(val id: String, val title: String) {
     }
 }
 
-// 7. Network Connection Mode for Adaptive Depth Streaming
 enum class ConnectionMode(val id: String, val label: String, val streamIntervalMs: String) {
     AUTO("AUTO", "🌐 AUTO DETECT", "AUTO"),
     BROADBAND("BROADBAND", "📶 BROADBAND (100ms)", "100ms"),
@@ -230,14 +213,12 @@ enum class ConnectionMode(val id: String, val label: String, val streamIntervalM
     }
 }
 
-// 8. Flow Snapshot Model
 data class FlowSnapshot(
     val timestampMs: Long,
     val price: Double,
     val openInterest: Double
 )
 
-// 9. OI Flow Regime Diagnostics / Debug State Model
 data class OiFlowRegimeDebugState(
     val isDebugEnabled: Boolean = false,
     val snapshotCount: Int = 0,
@@ -271,7 +252,6 @@ data class OiFlowRegimeDebugState(
     val warnings: List<String> = emptyList()
 )
 
-// 10. Dedicated OI Flow Regime State Model (Enhanced Version with Debug)
 data class OIFlowRegimeState(
     val regime: String = "BUILDING WINDOW",
     val mechanics: String = "Waiting for sufficient historical data",
@@ -287,7 +267,6 @@ data class OIFlowRegimeState(
     val debugState: OiFlowRegimeDebugState = OiFlowRegimeDebugState()
 )
 
-// 11. Trade Snapshot Data Model (Phase 4: Order Flow Engine)
 data class TradeSnapshot(
     val timestampMs: Long,
     val price: Double,
@@ -295,7 +274,6 @@ data class TradeSnapshot(
     val isBuyerMaker: Boolean
 )
 
-// WebSocket Connection State Machine Stages
 enum class WsConnectionStage {
     SOCKET_CREATING,
     SOCKET_OPEN,
@@ -306,7 +284,6 @@ enum class WsConnectionStage {
     DISCONNECTED
 }
 
-// 12. Order Flow Regime Diagnostics / Debug State Model (Full Diagnostics Pipeline with Wyckoff V3.5 Metrics)
 data class OrderFlowRegimeDebugState(
     val isDebugEnabled: Boolean = false,
     val connectionStage: WsConnectionStage = WsConnectionStage.DISCONNECTED,
@@ -361,7 +338,6 @@ data class OrderFlowRegimeDebugState(
     val warnings: List<String> = emptyList()
 )
 
-// 13. Order Flow Regime State Model (Live WS Stream Engine V3.5)
 data class OrderFlowRegimeState(
     val regime: String = "BALANCED FLOW",
     val badgeColor: Color = Color(0xFF9CA3AF),
@@ -391,14 +367,12 @@ data class OrderFlowRegimeState(
     val debugState: OrderFlowRegimeDebugState = OrderFlowRegimeDebugState()
 )
 
-// 14. Flow Consensus History Event Model (Consensus Memory Engine)
 data class ConsensusHistoryEvent(
     val timestampFormatted: String,
     val consensus: String,
     val badgeColor: Color
 )
 
-// 15. Flow Consensus Diagnostics / Debug State Model (V3.5 Engine)
 data class FlowConsensusDebugState(
     val isDebugEnabled: Boolean = false,
     val inputOiRegime: String = "NEUTRAL",
@@ -422,7 +396,6 @@ data class FlowConsensusDebugState(
     val ruleFired: String = "No rule fired (NEUTRAL)"
 )
 
-// 16. Flow Consensus State Model (Dual Engine Consensus, Intent, Mechanics/Trade Bias & Unified 0-100% Confidence)
 data class FlowConsensusState(
     val consensus: String = "NEUTRAL",
     val badgeColor: Color = Color(0xFF9CA3AF),
@@ -449,7 +422,6 @@ data class FlowConsensusState(
     val debugState: FlowConsensusDebugState = FlowConsensusDebugState()
 )
 
-// 17. Smart Money Position Snapshot (Phase 6: SMPE Engine)
 data class SmartMoneySnapshot(
     val timestampMs: Long,
     val price: Double,
@@ -460,7 +432,6 @@ data class SmartMoneySnapshot(
     val capitalRatio: Double
 )
 
-// 18. Smart Money Position Engine (SMPE) State Model (Phase 6)
 data class SmpeUiState(
     val isDebugEnabled: Boolean = false,
     val currentPrice: Double = 0.0,
@@ -489,7 +460,6 @@ data class SmpeUiState(
     val ruleEvaluated: String = "NO_RULE_MATCH => NEUTRAL"
 )
 
-// The math engine to calculate candle-specific aggression (Dip vs Dump)
 data class CandleOrderFlow(
     val openTime: Long,
     val open: Double,

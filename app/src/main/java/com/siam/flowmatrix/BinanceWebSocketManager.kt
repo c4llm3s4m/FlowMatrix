@@ -286,6 +286,7 @@ class BinanceWebSocketManager(
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (this@BinanceWebSocketManager.webSocket != webSocket) return
                 Log.d("BinanceWS", "WebSocket connected onOpen")
+                Log.d("FM_TRACE", "[WS_STATE] onOpen")
                 reconnectAttempt = 0
                 _connectionState.value = WebSocketState.Connected
                 _tradeStreamStage.value = WsConnectionStage.SOCKET_OPEN
@@ -449,6 +450,7 @@ class BinanceWebSocketManager(
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 if (this@BinanceWebSocketManager.webSocket != webSocket) return
                 Log.e("BinanceWS", "WebSocket onFailure: message=${t.message}, response code=${response?.code}", t)
+                Log.d("FM_TRACE", "[WS_STATE] onFailure err=${t::class.java.simpleName}:${t.message}")
                 _tradeStreamStage.value = WsConnectionStage.ERROR
                 _tradeLastError.value = t.message ?: "Connection failure"
                 handleDisconnect()
@@ -487,6 +489,7 @@ class BinanceWebSocketManager(
     }
 
     fun reconnect() {
+        Log.d("FM_TRACE", "[WS_STATE] reconnect_called")
         reconnectAttempt = 0
         isManuallyDisconnected.set(false)
         connectInternal()
@@ -517,6 +520,7 @@ class BinanceWebSocketManager(
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .readTimeout(0, TimeUnit.MILLISECONDS)
                 .retryOnConnectionFailure(true)
+                .eventListenerFactory { FMTraceEventListener("WS") }
                 .build()
         }
     }

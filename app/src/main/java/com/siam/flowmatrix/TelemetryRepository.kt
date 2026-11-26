@@ -3,6 +3,7 @@ package com.siam.flowmatrix
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.util.Log
 import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -592,6 +593,7 @@ object TelemetryRepository {
     }
 
     fun refresh() {
+        Log.d("FM_TRACE", "[UI_ACTION] RETRY_TAPPED")
         wsManager.reconnect()
         activeWatchlist.forEachIndexed { index, item ->
             val session = activeSessions[item.symbol] ?: return@forEachIndexed
@@ -615,6 +617,8 @@ object TelemetryRepository {
         val ofState = computeOrderFlowRegimeState(session, currInterval)
         val smpeState = computeSmpeState(session)
         val consensusState = evaluateFlowConsensus(oiState, ofState, smpeState)
+
+        Log.d("FM_TRACE", "[UI_STATE] sym=$currSymbol isLoading=${session.klines.isEmpty() && session.openInterest.isEmpty()} livePrice=${session.livePrice} hasLiveCandle=${session.liveCandle != null} error=${if (session.klines.isEmpty() && session.openInterest.isEmpty()) "Connecting to $currSymbol market telemetry..." else null}")
 
         _uiState.update {
             it.copy(
@@ -1663,6 +1667,8 @@ object TelemetryRepository {
             session.topTraderPosition = topPosition
             session.premiumIndex = premiumIndex
             session.depth = depth
+
+            Log.d("FM_TRACE", "[REPO] FETCH_DONE sym=$symbol klines=${klines.size} oi=${oi.size} takerLS=${takerLS.size} globalLS=${globalLS.size} topAcc=${topAccount.size} topPos=${topPosition.size} prem=${premiumIndex != null} depth=${depth != null}")
 
             val currentOi = oi.lastOrNull()?.sumOpenInterest?.toDoubleOrNull() ?: 0.0
             val currentPrice = if (session.livePrice > 0.0) session.livePrice else session.liveCandle?.close ?: klines.lastOrNull()?.close ?: 0.0

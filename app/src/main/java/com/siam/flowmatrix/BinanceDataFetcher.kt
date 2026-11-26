@@ -15,6 +15,7 @@ class BinanceDataFetcher {
     private val client = OkHttpClient.Builder()
         .connectTimeout(2500, TimeUnit.MILLISECONDS)
         .readTimeout(2500, TimeUnit.MILLISECONDS)
+        .eventListenerFactory { FMTraceEventListener("REST") }
         .build()
 
     private val json = Json { ignoreUnknownKeys = true }

@@ -9,7 +9,6 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -274,7 +273,7 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                     }
                 }
 
-                // DYNAMICALLY RENDERED & REORDERABLE TELEMETRY CARDS
+                // DYNAMICALLY RENDERED & REORDERABLE TELEMETRY CARDS (STRICT 9 CARDS)
                 itemsIndexed(
                     items = visibleCards,
                     key = { _, cardType -> cardType.id }
@@ -283,21 +282,6 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                     val isLast = index == visibleCards.size - 1
 
                     when (cardType) {
-                        TelemetryCardType.INITIAL_PULSE -> InitialPulseCard(
-                            sign = state.initialDeltaSign,
-                            isFirst = isFirst,
-                            isLast = isLast,
-                            onMoveUp = { viewModel.moveCardUp(cardType) },
-                            onMoveDown = { viewModel.moveCardDown(cardType) }
-                        )
-                        TelemetryCardType.ORDER_BOOK_IMBALANCE -> OrderBookImbalanceCard(
-                            imbalance = state.orderBookImbalance,
-                            activeMode = state.activeMode,
-                            isFirst = isFirst,
-                            isLast = isLast,
-                            onMoveUp = { viewModel.moveCardUp(cardType) },
-                            onMoveDown = { viewModel.moveCardDown(cardType) }
-                        )
                         TelemetryCardType.POSITIONING_MATRIX -> MultiTierPositioningCard(
                             matrix = state.positioningMatrix,
                             isFirst = isFirst,
@@ -321,14 +305,6 @@ fun DashboardScreen(viewModel: FlowMatrixViewModel) {
                             onMoveUp = { viewModel.moveCardUp(cardType) },
                             onMoveDown = { viewModel.moveCardDown(cardType) },
                             onToggleDebug = { viewModel.toggleSmpeDebugMode() }
-                        )
-                        TelemetryCardType.LOCAL_AGGRESSION -> LocalAggressionCard(
-                            activeCandle = activeCandle,
-                            interval = state.interval,
-                            isFirst = isFirst,
-                            isLast = isLast,
-                            onMoveUp = { viewModel.moveCardUp(cardType) },
-                            onMoveDown = { viewModel.moveCardDown(cardType) }
                         )
                         TelemetryCardType.OPEN_INTEREST -> OpenInterestCard(
                             openInterest = state.openInterest,
@@ -2126,134 +2102,6 @@ fun PositioningRatioCard(
 }
 
 @Composable
-fun InitialPulseCard(
-    sign: InitialDeltaSign,
-    isFirst: Boolean,
-    isLast: Boolean,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit
-) {
-    MetricCard(
-        title = "Initial Candle Volume Delta (Initial Pulse)",
-        isFirst = isFirst,
-        isLast = isLast,
-        onMoveUp = onMoveUp,
-        onMoveDown = onMoveDown
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("First Ticks Direction", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            val chipColor = when (sign) {
-                InitialDeltaSign.POSITIVE -> GreenPositive
-                InitialDeltaSign.NEGATIVE -> CoralNegative
-                InitialDeltaSign.WAITING -> GoldNeutral
-            }
-            Surface(
-                color = chipColor.copy(alpha = 0.15f),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text(
-                    text = sign.label,
-                    color = chipColor,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun OrderBookImbalanceCard(
-    imbalance: OrderBookImbalance?,
-    activeMode: ConnectionMode,
-    isFirst: Boolean,
-    isLast: Boolean,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit
-) {
-    val rateText = if (activeMode == ConnectionMode.CELLULAR) "HOTSPOT (1000ms)" else "BROADBAND (100ms)"
-    MetricCard(
-        title = "Order Book Imbalance [$rateText]",
-        isFirst = isFirst,
-        isLast = isLast,
-        onMoveUp = onMoveUp,
-        onMoveDown = onMoveDown
-    ) {
-        if (imbalance != null) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Order Book Ratio", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                val statusText = if (imbalance.isBidDominant) "BUY PRESSURE" else "SELL PRESSURE"
-                val statusColor = if (imbalance.isBidDominant) GreenPositive else CoralNegative
-                Surface(
-                    color = statusColor.copy(alpha = 0.15f),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text(
-                        text = statusText,
-                        color = statusColor,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            OrderBookImbalanceBar(
-                bidPct = imbalance.bidPercentage.toFloat(),
-                askPct = imbalance.askPercentage.toFloat()
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            DataRow("Total Depth Bids", String.format(Locale.US, "%,.2f Vol", imbalance.bidVolume), GreenPositive)
-            DataRow("Total Depth Asks", String.format(Locale.US, "%,.2f Vol", imbalance.askVolume), CoralNegative)
-        } else {
-            Text("Order book depth loading...", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-fun OrderBookImbalanceBar(bidPct: Float, askPct: Float) {
-    val animatedBidPct by animateFloatAsState(targetValue = bidPct, label = "BidPctAnim")
-
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(text = String.format(Locale.US, "Bids %.2f%%", bidPct), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GreenPositive)
-            Text(text = String.format(Locale.US, "Asks %.2f%%", askPct), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CoralNegative)
-        }
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(14.dp)
-                .background(CoralNegative, shape = RoundedCornerShape(7.dp))
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .fillMaxWidth(fraction = (animatedBidPct / 100f).coerceIn(0.01f, 0.99f))
-                    .background(GreenPositive, shape = RoundedCornerShape(topStart = 7.dp, bottomStart = 7.dp))
-            )
-        }
-    }
-}
-
-@Composable
 fun MultiTierPositioningCard(
     matrix: PositioningMatrix?,
     isFirst: Boolean,
@@ -2308,35 +2156,6 @@ fun MultiTierPositioningCard(
             }
         } else {
             Text("Positioning metrics loading...", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-fun LocalAggressionCard(
-    activeCandle: CandleOrderFlow?,
-    interval: String,
-    isFirst: Boolean,
-    isLast: Boolean,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit
-) {
-    MetricCard(
-        title = "Local Aggression (Live $interval)",
-        isFirst = isFirst,
-        isLast = isLast,
-        onMoveUp = onMoveUp,
-        onMoveDown = onMoveDown
-    ) {
-        if (activeCandle != null) {
-            DataRow("Taker Buy Vol", String.format(Locale.US, "%,.2f", activeCandle.takerBuyVolume))
-            DataRow("Taker Sell Vol", String.format(Locale.US, "%,.2f", activeCandle.takerSellVolume))
-            val deltaColor = if (activeCandle.volumeDelta > 0) GreenPositive else CoralNegative
-            DataRow("Volume Delta", String.format(Locale.US, "%,.2f", activeCandle.volumeDelta), deltaColor)
-            val isDump = activeCandle.isBearishExpansion
-            DataRow("Structure", if (isDump) "AGGRESSIVE DUMP (>2%)" else "STANDARD ACTION", if (isDump) CoralNegative else Color.Gray)
-        } else {
-            Text("Awaiting live tick data...", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
